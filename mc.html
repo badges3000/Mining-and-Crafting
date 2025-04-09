@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-    <title>Minecraft Klon (Sun/Moon Fix)</title>
+    <title>Minecraft Klon (Einstellbarer Nebel)</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
     <style>
@@ -9,12 +9,18 @@
         canvas { display: block; }
         #blocker, #menu { position: absolute; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 10; color: white; }
         #menu { display: none; flex-direction: column; text-align: center; }
-        .menu-content { background-color: rgba(50, 50, 50, 0.9); padding: 30px; border-radius: 10px; display: flex; flex-direction: column; gap: 15px; min-width: 300px; }
+        .menu-content { background-color: rgba(50, 50, 50, 0.9); padding: 30px; border-radius: 10px; display: flex; flex-direction: column; gap: 15px; min-width: 300px; max-width: 90%; }
+        .menu-content h2 { margin-top: 0; }
         .menu-content label { display: block; margin-bottom: 5px; font-weight: bold; text-align: left; }
-        .menu-content .checkbox-label { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
-        .menu-content .checkbox-label input { margin-left: 10px; transform: scale(1.2); }
+        .menu-content .checkbox-label { display: flex; align-items: center; justify-content: space-between; cursor: pointer; padding: 5px 0; }
+        .menu-content .checkbox-label input { margin-left: 10px; transform: scale(1.2); cursor: pointer; }
         .menu-content input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 80px; text-align: center; margin-left: 10px; }
-        .menu-content div { display: flex; justify-content: space-between; align-items: center; }
+        /* Styles for slider */
+        .menu-content .slider-label { display: flex; align-items: center; justify-content: space-between; padding: 5px 0;}
+        .menu-content input[type="range"] { flex-grow: 1; margin-left: 10px; margin-right: 10px; cursor: pointer;}
+        .menu-content .slider-value { min-width: 30px; text-align: right; }
+
+        .menu-content div { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; }
         .menu-content button { padding: 10px 15px; border: none; border-radius: 5px; background-color: #666; color: white; font-size: 16px; cursor: pointer; transition: background-color 0.2s; margin-top: 10px; }
         .menu-content button:hover { background-color: #888; }
         .menu-content button:active { background-color: #555; }
@@ -30,7 +36,42 @@
 </head>
 <body>
     <div id="blocker"> <div id="instructions"> Klicken zum Spielen<br /> (W = Vorwärts, S = Rückwärts)<br> (A = Links, D = Rechts)<br> (Doppel-W = Sprinten)<br> (Maus = Umschauen, Leertaste = Springen, Shift = Ducken)<br> <small>(Linksklick = Platzierten Block entfernen)</small><br> <small>(Rechtsklick = Block setzen)</small><br> <small>(Blocktyp unten auswählen)</small><br> <small>(ESC = Menü öffnen/schließen)</small><br> <small style="color: #ffcc00;">(Kollisions-Optimierung aktiv)</small> </div> </div>
-    <div id="menu"> <div class="menu-content"> <h2>Menü</h2> <div> <label for="worldWidthInput">Weltbreite:</label> <input type="number" id="worldWidthInput" min="16" max="128" step="16"> </div> <div> <label for="worldDepthInput">Welttiefe:</label> <input type="number" id="worldDepthInput" min="16" max="128" step="16"> </div> <label class="checkbox-label" for="showCoordsCheckbox"> Koordinaten anzeigen <input type="checkbox" id="showCoordsCheckbox"> </label> <button id="restartButton">Neu Generieren</button> <button id="resumeButton">Fortsetzen</button> </div> </div>
+    <div id="menu">
+        <div class="menu-content">
+            <h2>Menü</h2>
+            <div>
+                <label for="worldWidthInput">Weltbreite:</label>
+                <input type="number" id="worldWidthInput" min="16" max="128" step="16">
+            </div>
+            <div>
+                <label for="worldDepthInput">Welttiefe:</label>
+                <input type="number" id="worldDepthInput" min="16" max="128" step="16">
+            </div>
+            <label class="checkbox-label" for="showCoordsCheckbox">
+                Koordinaten anzeigen
+                <input type="checkbox" id="showCoordsCheckbox">
+            </label>
+            <label class="checkbox-label" for="fogCheckbox">
+                Nebel An/Aus
+                <input type="checkbox" id="fogCheckbox">
+            </label>
+            <label class="slider-label" for="fogDistanceSlider">
+                Nebel-Distanz:
+                <input type="range" id="fogDistanceSlider" min="20" max="150" step="5">
+                <span id="fogDistanceValue"></span>
+            </label>
+            <label class="checkbox-label" for="noclipCheckbox">
+                Noclip An/Aus
+                <input type="checkbox" id="noclipCheckbox">
+            </label>
+            <label class="checkbox-label" for="flyCheckbox">
+                Fliegen An/Aus
+                <input type="checkbox" id="flyCheckbox">
+            </label>
+            <button id="restartButton">Neu Generieren</button>
+            <button id="resumeButton">Fortsetzen</button>
+        </div>
+    </div>
     <div id="coordsDisplay">X: 0.0 | Y: 0.0 | Z: 0.0</div>
     <div class="crosshair" id="crosshair"></div>
     <div id="block-selector"></div>
@@ -51,9 +92,9 @@
 
         // --- Global Variables ---
         let camera, scene, renderer, controls;
+        let playerObject;
         const dynamicObjects = [];
         let raycaster;
-        let sun, moon;
 
         // Movement
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
@@ -66,9 +107,9 @@
         const doubleTapDelay = 300;
 
         // Player dimensions
-        const playerHeightStanding = 2.1;
+        const playerHeightStanding = 1.9;
         const playerHeightCrouching = 0.9;
-        const crouchPositionOffsetY = 0.6;
+        const crouchPositionOffsetY = 0.5;
 
         // World Settings
         let worldWidth = 48, worldDepth = 48;
@@ -94,16 +135,15 @@
         // Game State
         let isGamePaused = false;
         let showCoords = true;
-        let simulationTime = 0;
-        const dayMinutes = 18;
-        const nightMinutes = 6;
-        const totalCycleMinutes = dayMinutes + nightMinutes;
-        const totalCycleSeconds = totalCycleMinutes * 60;
-        const dayNightThreshold = dayMinutes / totalCycleMinutes; // Proportion of cycle that is day (0.75)
+        let fogEnabled = true;
+        let noclipEnabled = false;
+        let flyModeEnabled = false;
+        let fogDistance = Math.max(30, worldWidth * 0.8); // *** Initial Fog Distance ***
 
         // DOM Elements
         let coordsDisplayElement;
         let blockerElement;
+        let fogCheckbox, noclipCheckbox, flyCheckbox, fogDistanceSlider, fogDistanceValue; // Menu elements
 
         // --- Texture Generation ---
         function createPixelTexture(c1, c2, c3, size = 16) { /* ... (no changes) ... */
@@ -131,6 +171,11 @@
         window.onload = () => {
             coordsDisplayElement = document.getElementById('coordsDisplay');
             blockerElement = document.getElementById('blocker');
+            fogCheckbox = document.getElementById('fogCheckbox');
+            noclipCheckbox = document.getElementById('noclipCheckbox');
+            flyCheckbox = document.getElementById('flyCheckbox');
+            fogDistanceSlider = document.getElementById('fogDistanceSlider');
+            fogDistanceValue = document.getElementById('fogDistanceValue');
             setupMenuControls();
             init();
             animate();
@@ -150,13 +195,12 @@
         function init() {
             console.log(`Initializing world: ${worldWidth}x${worldDepth}`);
             isGamePaused = false;
-            simulationTime = 0;
+            // simulationTime = 0; // Removed
 
             // --- Cleanup previous scene/controls if exists ---
             if (scene) {
                  if (controls) { controls.dispose(); controls = null; }
-                 if (sun) scene.remove(sun); // Remove old sun
-                 if (moon) scene.remove(moon); // Remove old moon
+                 if (playerObject) scene.remove(playerObject);
                 while(scene.children.length > 0){ const obj = scene.children[0]; scene.remove(obj); if (obj instanceof THREE.Mesh && obj.geometry) obj.geometry.dispose(); if (obj instanceof THREE.Mesh && obj.material) { if (obj.material.map && obj.material.map.dispose) obj.material.map.dispose(); obj.material.dispose(); } }
              }
              Object.keys(blockMaterials).forEach(key => { const mat = blockMaterials[key]; if (mat) { if (mat.map && mat.map.dispose) mat.map.dispose(); mat.dispose(); } delete blockMaterials[key]; });
@@ -169,30 +213,29 @@
             grassMaterial = new THREE.MeshLambertMaterial({ map: grassTexture }); dirtMaterial = new THREE.MeshLambertMaterial({ map: dirtTexture }); stoneMaterial = new THREE.MeshLambertMaterial({ map: stoneTexture }); waterMaterial = new THREE.MeshLambertMaterial({ map: waterTexture, transparent: true, opacity: 0.75 });
             blockMaterials['grass'] = grassMaterial; blockMaterials['dirt'] = dirtMaterial; blockMaterials['stone'] = stoneMaterial; blockMaterials['water'] = waterMaterial;
 
-            scene = new THREE.Scene(); scene.background = new THREE.Color(0x87CEEB);
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000); startX = 0; startZ = 0; startY = (getY(startX, startZ) + (playerHeightStanding / 2) + 0.1) * blockSize; startY = Math.max(startY, (seaLevel + playerHeightStanding / 2 + 0.1) * blockSize); camera.position.set(startX * blockSize, startY, startZ * blockSize);
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+
+            // *** Add Fog based on initial state and distance ***
+            setFog(); // Call helper function
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            playerObject = new THREE.Object3D(); playerObject.add(camera); camera.position.set(0, 0.15, 0); scene.add(playerObject);
+            startX = 0; startZ = 0; const startPlayerHalfHeight = playerHeightStanding / 2; startY = (getY(startX, startZ) + startPlayerHalfHeight + 0.1) * blockSize; startY = Math.max(startY, (seaLevel + startPlayerHalfHeight + 0.1) * blockSize); playerObject.position.set(startX * blockSize, startY, startZ * blockSize);
+
             if (!renderer) { renderer = new THREE.WebGLRenderer({ antialias: false }); renderer.setPixelRatio(window.devicePixelRatio); renderer.setSize(window.innerWidth, window.innerHeight); document.body.appendChild(renderer.domElement); }
 
             // Lighting
-            const hemisphereLight = new THREE.HemisphereLight(0xeeeeff, 0x777788, 1.0); scene.add(hemisphereLight);
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.8); directionalLight.position.set(50, 80, 30); scene.add(directionalLight);
-            scene.userData.hemisphereLight = hemisphereLight; scene.userData.directionalLight = directionalLight;
+            const hemisphereLight = new THREE.HemisphereLight(0xeeeeff, 0x777788, 1.0); scene.add(hemisphereLight); const directionalLight = new THREE.DirectionalLight(0xffffff, 1.8); directionalLight.position.set(50, 80, 30); scene.add(directionalLight);
 
             // Controls
-            controls = new PointerLockControls(camera, document.body); setupControlListeners(); scene.add(controls.getObject());
+            controls = new PointerLockControls(playerObject, document.body); setupControlListeners();
 
             // Interaction Setup
             if (!raycaster) { raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, 0, -1), 0, 6 * blockSize); }
             document.addEventListener('mousedown', onMouseDown);
 
-            // --- Sun (2D Plane) ---
-            const sunSize = 10; const sunGeometry = new THREE.PlaneGeometry(sunSize, sunSize); const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFF00, side: THREE.DoubleSide, transparent: true });
-            sun = new THREE.Mesh(sunGeometry, sunMaterial); scene.add(sun);
-
-            // --- Moon (2D Plane) ---
-            const moonSize = 8; const moonGeometry = new THREE.PlaneGeometry(moonSize, moonSize); const moonMaterial = new THREE.MeshBasicMaterial({ color: 0xEEEEEE, side: THREE.DoubleSide, transparent: true });
-            moon = new THREE.Mesh(moonGeometry, moonMaterial); scene.add(moon);
-
+            // --- Sun/Moon Removed ---
 
             // --- World Generation ---
             console.log(`Generating world meshes and populating spatial grid (${worldWidth}x${worldDepth})...`); const generationStartTime = performance.now(); for (let x = -worldHalfWidth; x < worldHalfWidth; x++) { for (let z = -worldHalfDepth; z < worldHalfDepth; z++) { const terrainHeight = getY(x, z); const solidHeight = Math.max(terrainHeight, seaLevel); for (let y = -5; y < solidHeight; y++) { let material = stoneMaterial; if (y >= seaLevel && y >= terrainHeight - 1) material = grassMaterial; else if (y >= seaLevel && y >= terrainHeight - 4) material = dirtMaterial; if (y < seaLevel && terrainHeight <= y) continue; const block = new THREE.Mesh(cubeGeometry, material); block.position.set( x * blockSize + blockSize / 2, y * blockSize + blockSize / 2, z * blockSize + blockSize / 2 ); scene.add(block); addObjectToGrid(block); } if (terrainHeight < seaLevel) { for (let y = terrainHeight; y < seaLevel; y++) { const waterBlock = new THREE.Mesh(cubeGeometry, waterMaterial); waterBlock.position.set( x * blockSize + blockSize / 2, y * blockSize + blockSize / 2, z * blockSize + blockSize / 2 ); waterBlock.userData.isWater = true; scene.add(waterBlock); addObjectToGrid(waterBlock); } } } } const generationEndTime = performance.now(); console.log(`World generation took ${(generationEndTime - generationStartTime).toFixed(2)} ms`);
@@ -200,40 +243,122 @@
             // Setup UI & Resize Listener
             setupBlockSelectorUI(); if (!window.onresize) { window.addEventListener('resize', onWindowResize); } document.getElementById('worldWidthInput').value = worldWidth; document.getElementById('worldDepthInput').value = worldDepth;
             coordsDisplayElement.style.display = showCoords ? 'block' : 'none';
+            // Set initial menu control values
+            fogCheckbox.checked = fogEnabled;
+            noclipCheckbox.checked = noclipEnabled;
+            flyCheckbox.checked = flyModeEnabled;
+            fogDistanceSlider.value = fogDistance;
+            fogDistanceValue.textContent = fogDistance;
+            fogDistanceSlider.max = Math.max(150, worldWidth * 1.5); // Adjust slider max based on world size
         }
 
         // --- Setup Listeners (Called AFTER controls are created) ---
         function setupControlListeners() { /* ... (no changes) ... */
-             const instructions = document.getElementById('instructions'); const crosshair = document.getElementById('crosshair'); const menu = document.getElementById('menu'); if (!blockerElement) blockerElement = document.getElementById('blocker'); instructions.onclick = () => { if(controls) controls.lock(); }; if (controls) { controls.addEventListener('lock', () => { if (!isGamePaused) { blockerElement.style.display = 'none'; crosshair.style.display = 'block'; menu.style.display = 'none'; } }); controls.addEventListener('unlock', () => { if (!isGamePaused) { blockerElement.style.display = 'flex'; } crosshair.style.display = 'none'; }); } document.removeEventListener('keydown', onKeyDown); document.removeEventListener('keyup', onKeyUp); document.addEventListener('keydown', onKeyDown); document.addEventListener('keyup', onKeyUp);
+             const instructions = document.getElementById('instructions'); const crosshair = document.getElementById('crosshair'); const menu = document.getElementById('menu'); if (!blockerElement) blockerElement = document.getElementById('blocker');
+             const lockControls = () => { if(controls) controls.lock(); };
+             const onLock = () => { if (!isGamePaused) { blockerElement.style.display = 'none'; crosshair.style.display = 'block'; menu.style.display = 'none'; } };
+             const onUnlock = () => { if (!isGamePaused) { blockerElement.style.display = 'flex'; } crosshair.style.display = 'none'; };
+             instructions.onclick = lockControls;
+             if (controls) { controls.addEventListener('lock', onLock); controls.addEventListener('unlock', onUnlock); }
+             document.removeEventListener('keydown', onKeyDown); document.removeEventListener('keyup', onKeyUp); document.addEventListener('keydown', onKeyDown); document.addEventListener('keyup', onKeyUp);
          }
 
         // Define key handlers outside setup so they can be referenced for removal
         const onKeyDown = (event) => { /* ... (no changes) ... */
-            if (event.code === 'Escape') { toggleMenu(); return; } if (isGamePaused) return; switch (event.code) { case 'KeyW': const timeNow = performance.now(); if (timeNow - lastWPressTime < doubleTapDelay) { isSprinting = true; } lastWPressTime = timeNow; moveForward = true; break; case 'KeyA': moveLeft = true; break; case 'KeyS': moveBackward = true; isSprinting = false; break; case 'KeyD': moveRight = true; break; case 'Space': if (onGround || isInWater || canJump) { velocity.y += isInWater ? 6.0 : 10.0; canJump = false; onGround = false; isInWater = false; /* isSprinting = false; */ } break; case 'ShiftLeft': case 'ShiftRight': if (!isShiftDown && controls) { controls.getObject().position.y -= crouchPositionOffsetY; } isShiftDown = true; isSprinting = false; break; case 'Digit1': selectBlock('grass'); break; case 'Digit2': selectBlock('dirt'); break; case 'Digit3': selectBlock('stone'); break; case 'Digit4': selectBlock('water'); break; }
+            if (event.code === 'Escape') { toggleMenu(); return; } if (isGamePaused) return; switch (event.code) { case 'KeyW': moveForward = true; const timeNow = performance.now(); if (timeNow - lastWPressTime < doubleTapDelay) { isSprinting = true; } lastWPressTime = timeNow; break; case 'KeyA': moveLeft = true; break; case 'KeyS': moveBackward = true; isSprinting = false; break; case 'KeyD': moveRight = true; break; case 'Space': if (flyModeEnabled) { velocity.y += 1; } else if (onGround || isInWater || canJump) { velocity.y += isInWater ? 6.0 : 10.0; canJump = false; onGround = false; isInWater = false; /* isSprinting = false; */ } break; case 'ShiftLeft': case 'ShiftRight': if (flyModeEnabled) { velocity.y -= 1; } else { if (!isShiftDown && playerObject) { playerObject.position.y -= crouchPositionOffsetY; } isShiftDown = true; isSprinting = false; } break; case 'Digit1': selectBlock('grass'); break; case 'Digit2': selectBlock('dirt'); break; case 'Digit3': selectBlock('stone'); break; case 'Digit4': selectBlock('water'); break; }
         };
         const onKeyUp = (event) => { /* ... (no changes) ... */
-                if (isGamePaused && event.code !== 'Escape') return; switch (event.code) { case 'KeyW': moveForward = false; isSprinting = false; break; case 'KeyA': moveLeft = false; break; case 'KeyS': moveBackward = false; break; case 'KeyD': moveRight = false; break; case 'ShiftLeft': case 'ShiftRight': if (isShiftDown && controls) { controls.getObject().position.y += crouchPositionOffsetY; } isShiftDown = false; break; }
+                if (isGamePaused && event.code !== 'Escape') return; switch (event.code) { case 'KeyW': moveForward = false; isSprinting = false; break; case 'KeyA': moveLeft = false; break; case 'KeyS': moveBackward = false; break; case 'KeyD': moveRight = false; break; case 'ShiftLeft': case 'ShiftRight': if (!flyModeEnabled) { if (isShiftDown && playerObject) { playerObject.position.y += crouchPositionOffsetY; } isShiftDown = false; } break; }
         };
 
 
-        function setupMenuControls() { /* ... (Reset logic included) ... */
-             const menu = document.getElementById('menu'); const resumeButton = document.getElementById('resumeButton'); const restartButton = document.getElementById('restartButton'); const widthInput = document.getElementById('worldWidthInput'); const depthInput = document.getElementById('worldDepthInput'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox'); resumeButton.addEventListener('click', toggleMenu);
+        function setupMenuControls() {
+             const menu = document.getElementById('menu'); const resumeButton = document.getElementById('resumeButton'); const restartButton = document.getElementById('restartButton'); const widthInput = document.getElementById('worldWidthInput'); const depthInput = document.getElementById('worldDepthInput'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox');
+             fogCheckbox = document.getElementById('fogCheckbox'); noclipCheckbox = document.getElementById('noclipCheckbox'); flyCheckbox = document.getElementById('flyCheckbox'); fogDistanceSlider = document.getElementById('fogDistanceSlider'); fogDistanceValue = document.getElementById('fogDistanceValue'); // Get elements
+
+             resumeButton.addEventListener('click', toggleMenu);
              restartButton.addEventListener('click', () => {
                  const newWidth = parseInt(widthInput.value, 10); const newDepth = parseInt(depthInput.value, 10); if (isNaN(newWidth) || isNaN(newDepth) || newWidth < 16 || newWidth > 128 || newDepth < 16 || newDepth > 128) { alert("Bitte gültige Weltgröße eingeben (Breite/Tiefe: 16-128)."); return; }
                  moveForward = false; moveBackward = false; moveLeft = false; moveRight = false; isSprinting = false; isShiftDown = false; velocity.set(0, 0, 0);
                  worldWidth = newWidth; worldDepth = newDepth; worldHalfWidth = worldWidth / 2; worldHalfDepth = worldDepth / 2;
+                 // *** Update fog distance slider max based on new world size ***
+                 fogDistanceSlider.max = Math.max(150, worldWidth * 1.5);
+                 // *** Reset fog distance to default for new world size? Or keep user setting? Keep for now. ***
+                 // fogDistance = Math.max(30, worldWidth * 0.8);
+                 // fogDistanceSlider.value = fogDistance;
+                 // fogDistanceValue.textContent = fogDistance;
+
                  menu.style.display = 'none'; isGamePaused = false;
                  init(); // Re-initialize the world
                  blockerElement.style.display = 'flex'; // Show blocker
              });
-             showCoordsCheckbox.addEventListener('change', () => { showCoords = showCoordsCheckbox.checked; coordsDisplayElement.style.display = showCoords ? 'block' : 'none'; console.log("Show Coords:", showCoords); }); widthInput.value = worldWidth; depthInput.value = worldDepth; showCoordsCheckbox.checked = showCoords;
+             showCoordsCheckbox.addEventListener('change', () => { showCoords = showCoordsCheckbox.checked; coordsDisplayElement.style.display = showCoords ? 'block' : 'none'; });
+             fogCheckbox.addEventListener('change', () => {
+                 fogEnabled = fogCheckbox.checked;
+                 setFog(); // Update fog state
+             });
+             // *** Add listener for fog slider ***
+             fogDistanceSlider.addEventListener('input', () => {
+                 fogDistance = parseFloat(fogDistanceSlider.value);
+                 fogDistanceValue.textContent = fogDistance.toFixed(0);
+                 setFog(); // Update fog state
+             });
+             noclipCheckbox.addEventListener('change', () => {
+                 noclipEnabled = noclipCheckbox.checked; if (!noclipEnabled && flyModeEnabled) { flyCheckbox.checked = false; flyModeEnabled = false; }
+             });
+             flyCheckbox.addEventListener('change', () => {
+                 flyModeEnabled = flyCheckbox.checked; if (flyModeEnabled) { noclipEnabled = true; noclipCheckbox.checked = true; velocity.y = 0; } else { noclipEnabled = false; noclipCheckbox.checked = false; }
+             });
+
+             // Set initial menu state
+             widthInput.value = worldWidth; depthInput.value = worldDepth; showCoordsCheckbox.checked = showCoords;
+             fogCheckbox.checked = fogEnabled; noclipCheckbox.checked = noclipEnabled; flyCheckbox.checked = flyModeEnabled;
+             fogDistanceSlider.value = fogDistance; fogDistanceValue.textContent = fogDistance.toFixed(0);
+             fogDistanceSlider.max = Math.max(150, worldWidth * 1.5); // Initial max based on world size
          }
-        function toggleMenu() { /* ... (no changes) ... */
-            const menu = document.getElementById('menu'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox'); isGamePaused = !isGamePaused; if (isGamePaused) { showCoordsCheckbox.checked = showCoords; menu.style.display = 'flex'; if(controls) controls.unlock(); } else { menu.style.display = 'none'; if(controls) controls.lock(); } console.log("Game Paused:", isGamePaused);
+
+        // *** Helper function to set/update fog ***
+        function setFog() {
+            if (fogEnabled) {
+                const fogColor = 0x87CEEB;
+                const far = fogDistance;
+                const near = far * 0.2; // Keep near proportional to far distance
+                if (!scene.fog) {
+                    scene.fog = new THREE.Fog(fogColor, near, far);
+                    scene.userData.fog = scene.fog; // Store ref if needed elsewhere
+                } else {
+                    scene.fog.near = near;
+                    scene.fog.far = far;
+                    scene.fog.color.set(fogColor); // Ensure color is correct
+                }
+            } else {
+                scene.fog = null;
+            }
+        }
+
+
+        function toggleMenu() {
+            const menu = document.getElementById('menu');
+            isGamePaused = !isGamePaused;
+            if (isGamePaused) {
+                // Update checkboxes/sliders to reflect current state when opening menu
+                document.getElementById('showCoordsCheckbox').checked = showCoords;
+                fogCheckbox.checked = fogEnabled;
+                noclipCheckbox.checked = noclipEnabled;
+                flyCheckbox.checked = flyModeEnabled;
+                fogDistanceSlider.value = fogDistance;
+                fogDistanceValue.textContent = fogDistance.toFixed(0);
+                menu.style.display = 'flex';
+                if(controls) controls.unlock();
+            } else {
+                menu.style.display = 'none';
+                if(controls) controls.lock();
+            }
+            console.log("Game Paused:", isGamePaused);
          }
 
         function onWindowResize() { /* ... (no changes) ... */
-            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+             if (camera && renderer) { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
          }
         function setupBlockSelectorUI() { /* ... (no changes) ... */
             const selector = document.getElementById('block-selector'); selector.innerHTML = ''; Object.keys(blockMaterials).forEach(type => { const option = document.createElement('div'); option.classList.add('block-option'); option.dataset.type = type; const material = blockMaterials[type]; const texture = material.map; if (texture && texture.image instanceof HTMLCanvasElement) { option.style.backgroundImage = `url(${texture.image.toDataURL()})`; } else { option.style.backgroundColor = material.color ? `#${material.color.getHexString()}` : '#ccc'; } if (type === 'water') { option.style.opacity = '0.75'; } else { option.style.opacity = '1'; } option.addEventListener('click', () => { selectBlock(type); }); selector.appendChild(option); }); updateSelectedBlockHighlight();
@@ -247,20 +372,12 @@
 
         // --- Mouse Interaction ---
         function onMouseDown(event) { /* ... (no changes) ... */
-            if (isGamePaused || !controls || !controls.isLocked) return; raycaster.setFromCamera({ x: 0, y: 0 }, camera); const nearbyObjectsForRaycast = getNearbyBlocks(controls.getObject().position.x, controls.getObject().position.z, 2); const intersects = raycaster.intersectObjects(nearbyObjectsForRaycast, false); if (intersects.length > 0) { const intersect = intersects[0]; if (intersect.distance > 6 * blockSize) return; if (event.button === 0) { if (intersect.object.position.y < (-4 * blockSize)) return; removeObjectFromGrid(intersect.object); const index = dynamicObjects.indexOf(intersect.object); if (index > -1) dynamicObjects.splice(index, 1); scene.remove(intersect.object); console.log("Removed block."); } else if (event.button === 2) { const placementPos = new THREE.Vector3().copy(intersect.point).add(intersect.face.normal.clone().multiplyScalar(0.01)); placementPos.divideScalar(blockSize).floor().multiplyScalar(blockSize).addScalar(blockSize / 2); let occupied = false; const nearbyForPlacementCheck = getNearbyBlocks(placementPos.x, placementPos.z, 0); for (const obj of nearbyForPlacementCheck) { if (obj.position.distanceToSquared(placementPos) < 0.1) { occupied = true; break; } } const playerHeight = isShiftDown ? playerHeightCrouching : playerHeightStanding; const playerWidth = 0.4 * blockSize; const playerHeadPos = controls.getObject().position.clone().add(new THREE.Vector3(0, playerHeight/2 - 0.1, 0)); const playerFeetPos = controls.getObject().position.clone().add(new THREE.Vector3(0, -playerHeight/2 + 0.1, 0)); const newBlockBox = new THREE.Box3().setFromCenterAndSize(placementPos, new THREE.Vector3(blockSize, blockSize, blockSize)); if (!occupied && !(newBlockBox.containsPoint(playerHeadPos) || newBlockBox.containsPoint(playerFeetPos) || (Math.abs(placementPos.x - controls.getObject().position.x) < playerWidth + blockSize/2 && Math.abs(placementPos.z - controls.getObject().position.z) < playerWidth + blockSize/2 && placementPos.y > playerFeetPos.y && placementPos.y < playerHeadPos.y))) { const selectedMaterial = blockMaterials[selectedBlockType] || stoneMaterial; const voxel = new THREE.Mesh(cubeGeometry, selectedMaterial); voxel.position.copy(placementPos); if (selectedBlockType === 'water') { voxel.userData.isWater = true; } scene.add(voxel); dynamicObjects.push(voxel); addObjectToGrid(voxel); } else { console.log("Cannot place block here (occupied or inside player)."); } } } else { console.log("No block intersected."); }
+            if (isGamePaused || !controls || !controls.isLocked) return; raycaster.setFromCamera({ x: 0, y: 0 }, camera); const nearbyObjectsForRaycast = getNearbyBlocks(playerObject.position.x, playerObject.position.z, 2); const intersects = raycaster.intersectObjects(nearbyObjectsForRaycast, false); if (intersects.length > 0) { const intersect = intersects[0]; if (intersect.distance > 6 * blockSize) return; if (event.button === 0) { if (intersect.object.position.y < (-4 * blockSize)) return; removeObjectFromGrid(intersect.object); const index = dynamicObjects.indexOf(intersect.object); if (index > -1) dynamicObjects.splice(index, 1); scene.remove(intersect.object); console.log("Removed block."); } else if (event.button === 2) { const placementPos = new THREE.Vector3().copy(intersect.point).add(intersect.face.normal.clone().multiplyScalar(0.01)); placementPos.divideScalar(blockSize).floor().multiplyScalar(blockSize).addScalar(blockSize / 2); let occupied = false; const nearbyForPlacementCheck = getNearbyBlocks(placementPos.x, placementPos.z, 0); for (const obj of nearbyForPlacementCheck) { if (obj.position.distanceToSquared(placementPos) < 0.1) { occupied = true; break; } } const playerHeight = isShiftDown ? playerHeightCrouching : playerHeightStanding; const playerWidth = 0.4 * blockSize; const playerHeadPos = playerObject.position.clone().add(new THREE.Vector3(0, playerHeight/2 - 0.1, 0)); const playerFeetPos = playerObject.position.clone().add(new THREE.Vector3(0, -playerHeight/2 + 0.1, 0)); const newBlockBox = new THREE.Box3().setFromCenterAndSize(placementPos, new THREE.Vector3(blockSize, blockSize, blockSize)); if (!occupied && !(newBlockBox.containsPoint(playerHeadPos) || newBlockBox.containsPoint(playerFeetPos) || (Math.abs(placementPos.x - playerObject.position.x) < playerWidth + blockSize/2 && Math.abs(placementPos.z - playerObject.position.z) < playerWidth + blockSize/2 && placementPos.y > playerFeetPos.y && placementPos.y < playerHeadPos.y))) { const selectedMaterial = blockMaterials[selectedBlockType] || stoneMaterial; const voxel = new THREE.Mesh(cubeGeometry, selectedMaterial); voxel.position.copy(placementPos); if (selectedBlockType === 'water') { voxel.userData.isWater = true; } scene.add(voxel); dynamicObjects.push(voxel); addObjectToGrid(voxel); } else { console.log("Cannot place block here (occupied or inside player)."); } } } else { console.log("No block intersected."); }
          }
 
 
         // --- Animation Loop ---
-        const dayNightCycleEnabled = true;
-        const sunAngleOffset = -Math.PI / 2;
-        const moonAngleOffset = Math.PI / 2;
-        // Pre-create colors for lerping
-        const skyColorDay = new THREE.Color(0x87CEEB);
-        const skyColorNight = new THREE.Color(0x000020);
-        const groundColorDay = new THREE.Color(0x777788);
-        const groundColorNight = new THREE.Color(0x111122);
-
+        // Removed day/night cycle logic
 
         function animate() {
             requestAnimationFrame(animate);
@@ -268,71 +385,25 @@
             const delta = Math.min(0.1, (time - prevTime) / 1000);
             prevTime = time;
 
-            // --- Time of Day Simulation & Updates ---
-            if (dayNightCycleEnabled) {
-                simulationTime += delta;
-                const cycleProgress = (simulationTime % totalCycleSeconds) / totalCycleSeconds;
-                const timeAngle = cycleProgress * Math.PI * 2;
-                const lightFactor = Math.max(0.15, (Math.cos((cycleProgress - 0.25) * Math.PI * 2) + 1) / 2);
+            if (showCoords && coordsDisplayElement && playerObject) { const playerPos = playerObject.position; coordsDisplayElement.textContent = `X: ${playerPos.x.toFixed(1)} | Y: ${playerPos.y.toFixed(1)} | Z: ${playerPos.z.toFixed(1)}`; }
+            if (!renderer || !scene || !camera) return;
+            renderer.render(scene, camera);
 
-                // Update Sun/Moon Position & Visibility
-                const celestialRadius = Math.max(worldWidth, worldDepth) * blockSize * 0.6;
-                const celestialHeight = maxTerrainHeight + 15;
-                const sunAngle = timeAngle + sunAngleOffset;
-                const moonAngle = timeAngle + moonAngleOffset;
-                const isDayTime = cycleProgress < dayNightThreshold; // Check if it's daytime
+            if (isGamePaused || !controls || !controls.isLocked) { return; }
 
-                if (sun) {
-                    sun.position.x = Math.cos(sunAngle) * celestialRadius;
-                    sun.position.y = Math.sin(sunAngle) * celestialRadius * 0.6 + celestialHeight;
-                    sun.position.z = 0;
-                    sun.visible = isDayTime; // *** Use isDayTime for visibility ***
-                    if (sun.visible) sun.lookAt(camera.position); // *** Make sun face camera ***
-                }
-                if (moon) {
-                    moon.position.x = Math.cos(moonAngle) * celestialRadius;
-                    moon.position.y = Math.sin(moonAngle) * celestialRadius * 0.6 + celestialHeight;
-                    moon.position.z = 0;
-                    moon.visible = !isDayTime; // *** Use inverted isDayTime for visibility ***
-                    if (moon.visible) moon.lookAt(camera.position); // *** Make moon face camera ***
-                }
-
-
-                // Update Lighting
-                const hemiLight = scene.userData.hemisphereLight;
-                const dirLight = scene.userData.directionalLight;
-
-                if (hemiLight) {
-                    hemiLight.intensity = lightFactor * 0.8 + 0.2;
-                    hemiLight.color.lerpColors(skyColorNight, skyColorDay, lightFactor);
-                    hemiLight.groundColor.lerpColors(groundColorNight, groundColorDay, lightFactor);
-                }
-                if (dirLight) {
-                     dirLight.intensity = lightFactor * 1.6 + 0.2;
-                     if (sun && sun.visible) { dirLight.position.copy(sun.position).normalize().multiplyScalar(100); }
-                     else if (moon && moon.visible) { dirLight.position.copy(moon.position).normalize().multiplyScalar(100); }
-                }
-                 // Update Sky Color
-                 scene.background.lerpColors(skyColorNight, skyColorDay, lightFactor);
-
-            } // End Day/Night Cycle Updates
-
-
-            if (showCoords && coordsDisplayElement) { const playerPos = controls.getObject().position; coordsDisplayElement.textContent = `X: ${playerPos.x.toFixed(1)} | Y: ${playerPos.y.toFixed(1)} | Z: ${playerPos.z.toFixed(1)}`; }
-            if (isGamePaused || !controls || !controls.isLocked) { renderer.render(scene, camera); return; }
-
-            const playerHeight = isShiftDown ? playerHeightCrouching : playerHeightStanding;
+            const playerHeight = isShiftDown && !flyModeEnabled ? playerHeightCrouching : playerHeightStanding;
             const playerHalfHeight = playerHeight / 2;
             const gravity = 30.0;
             let baseMoveSpeed;
-            if (isSprinting && !isShiftDown) { baseMoveSpeed = 50.0; }
-            else if (isShiftDown) { baseMoveSpeed = 12.5; }
+            if (isSprinting && !isShiftDown && !flyModeEnabled) { baseMoveSpeed = 50.0; }
+            else if (isShiftDown && !flyModeEnabled) { baseMoveSpeed = 12.5; }
+            else if (flyModeEnabled) { baseMoveSpeed = 25.0; }
             else { baseMoveSpeed = 25.0; }
             const jumpVelocity = 10.0;
             const damping = 10.0;
             isInWater = false;
 
-            const playerPos = controls.getObject().position;
+            const playerPos = playerObject.position;
             const originalPos = playerPos.clone();
             const playerWidth = 0.4 * blockSize;
             let wasOnGround = onGround;
@@ -342,14 +413,18 @@
             const tempBox = new THREE.Box3();
 
             // Check if in water
-            const playerFeetCheckY = playerPos.y - playerHalfHeight + 0.1; const playerHeadCheckY = playerPos.y + playerHalfHeight - 0.1;
-            for (const obj of nearbyBlocks) { if (obj.userData.isWater) { tempBox.setFromObject(obj); if (playerPos.x > tempBox.min.x && playerPos.x < tempBox.max.x && playerPos.z > tempBox.min.z && playerPos.z < tempBox.max.z && playerHeadCheckY > tempBox.min.y && playerFeetCheckY < tempBox.max.y) { isInWater = true; break; } } }
+            if (!flyModeEnabled && !noclipEnabled) {
+                const playerFeetCheckY = playerPos.y - playerHalfHeight + 0.1; const playerHeadCheckY = playerPos.y + playerHalfHeight - 0.1;
+                for (const obj of nearbyBlocks) { if (obj.userData.isWater) { tempBox.setFromObject(obj); if (playerPos.x > tempBox.min.x && playerPos.x < tempBox.max.x && playerPos.z > tempBox.min.z && playerPos.z < tempBox.max.z && playerHeadCheckY > tempBox.min.y && playerFeetCheckY < tempBox.max.y) { isInWater = true; break; } } }
+            }
 
             // Adjust physics
-            const currentGravity = isInWater ? gravity * 0.5 : gravity; const currentMoveSpeed = isInWater ? baseMoveSpeed * 0.5 : baseMoveSpeed; const currentDamping = isInWater ? damping * 2.0 : damping;
+            const applyGravity = !flyModeEnabled && !noclipEnabled;
+            const currentGravity = isInWater ? gravity * 0.5 : gravity; const currentMoveSpeed = isInWater && !flyModeEnabled ? baseMoveSpeed * 0.5 : baseMoveSpeed; const currentDamping = isInWater && !flyModeEnabled ? damping * 2.0 : damping;
 
             // Apply Gravity & Damping
-            if (!onGround || velocity.y > 0) velocity.y -= currentGravity * delta;
+            if (applyGravity) { if (!onGround || velocity.y > 0) velocity.y -= currentGravity * delta; }
+            else { velocity.y -= velocity.y * damping * delta; } // Apply damping to vertical fly/noclip speed
             velocity.x -= velocity.x * currentDamping * delta;
             velocity.z -= velocity.z * currentDamping * delta;
 
@@ -360,63 +435,48 @@
             velocity.x -= rightDirection.x * direction.x * moveFactor; // A/D Fixed Sign
             velocity.z -= rightDirection.z * direction.x * moveFactor; // A/D Fixed Sign
 
-            // --- Y-AXIS COLLISION ---
-            let hitGround = false;
-            let hitCeiling = false;
-            let highestGroundY = -Infinity;
-            const verticalMovement = velocity.y * delta;
-            const anticipatedPlayerY = playerPos.y + verticalMovement;
-            const groundCheckTolerance = 0.1;
-            const ceilingCheckTolerance = 0.2;
-            const verticalProximityLimit = 1.5 * blockSize;
-
-            for (const item of nearbyBlocks) {
-                if (item.userData.isWater) continue;
-                const itemPos = item.position;
-                tempBox.setFromObject(item);
-                const blockTopY = tempBox.max.y; const blockBottomY = tempBox.min.y;
-                const playerFeet = anticipatedPlayerY - playerHalfHeight; const playerHead = anticipatedPlayerY + playerHalfHeight;
-                const horizontalOverlapMargin = 0.001;
-
-                if (playerPos.x + playerWidth > tempBox.min.x + horizontalOverlapMargin && playerPos.x - playerWidth < tempBox.max.x - horizontalOverlapMargin &&
-                    playerPos.z + playerWidth > tempBox.min.z + horizontalOverlapMargin && playerPos.z - playerWidth < tempBox.max.z - horizontalOverlapMargin)
-                {
-                    // Ceiling Check FIRST
-                    if (velocity.y > 0 && playerHead > blockBottomY - ceilingCheckTolerance &&
-                        originalPos.y + playerHalfHeight <= blockBottomY + ceilingCheckTolerance)
-                    { velocity.y = 0; hitCeiling = true; }
-                    // Ground Check
-                    if (velocity.y <= 0 && playerFeet < blockTopY + groundCheckTolerance &&
-                        originalPos.y - playerHalfHeight >= blockTopY - groundCheckTolerance &&
-                        originalPos.y - playerHalfHeight < blockTopY + verticalProximityLimit)
-                    { if (blockTopY > highestGroundY) { highestGroundY = blockTopY; } hitGround = true; }
+            // --- Collision Detection (Skip if Noclip) ---
+            if (!noclipEnabled) {
+                // --- Y-AXIS COLLISION ---
+                let hitGround = false; let hitCeiling = false; let highestGroundY = -Infinity;
+                const verticalMovement = velocity.y * delta; const anticipatedPlayerY = playerPos.y + verticalMovement;
+                const groundCheckTolerance = 0.1; const ceilingCheckTolerance = 0.2; const verticalProximityLimit = 1.5 * blockSize;
+                for (const item of nearbyBlocks) {
+                    if (item.userData.isWater) continue; const itemPos = item.position; tempBox.setFromObject(item);
+                    const blockTopY = tempBox.max.y; const blockBottomY = tempBox.min.y;
+                    const playerFeet = anticipatedPlayerY - playerHalfHeight; const playerHead = anticipatedPlayerY + playerHalfHeight;
+                    const horizontalOverlapMargin = 0.001;
+                    if (playerPos.x + playerWidth > tempBox.min.x + horizontalOverlapMargin && playerPos.x - playerWidth < tempBox.max.x - horizontalOverlapMargin &&
+                        playerPos.z + playerWidth > tempBox.min.z + horizontalOverlapMargin && playerPos.z - playerWidth < tempBox.max.z - horizontalOverlapMargin) {
+                        if (velocity.y > 0 && playerHead > blockBottomY - ceilingCheckTolerance && originalPos.y + playerHalfHeight <= blockBottomY + ceilingCheckTolerance) { velocity.y = 0; hitCeiling = true; }
+                        if (velocity.y <= 0 && playerFeet < blockTopY + groundCheckTolerance && originalPos.y - playerHalfHeight >= blockTopY - groundCheckTolerance && originalPos.y - playerHalfHeight < blockTopY + verticalProximityLimit) { if (blockTopY > highestGroundY) { highestGroundY = blockTopY; } hitGround = true; }
+                    }
                 }
+                if (hitGround) { playerPos.y = highestGroundY + playerHalfHeight + 0.001; velocity.y = 0; onGround = true; canJump = true; }
+                else if (hitCeiling) { playerPos.y = originalPos.y; if (velocity.y > 0) velocity.y = 0; onGround = false; }
+                else { playerPos.y = anticipatedPlayerY; onGround = false; if (wasOnGround) canJump = false; }
+
+                // --- X-AXIS COLLISION ---
+                playerPos.x += velocity.x * delta;
+                const collisionOffset = 0.03;
+                for (const item of nearbyBlocks) { if (item.userData.isWater) continue; tempBox.setFromObject(item); const playerFeet = playerPos.y - playerHalfHeight; const playerHead = playerPos.y + playerHalfHeight; if (playerHead > tempBox.min.y && playerFeet < tempBox.max.y && playerPos.z + playerWidth > tempBox.min.z && playerPos.z - playerWidth < tempBox.max.z) { if (velocity.x > 0 && playerPos.x + playerWidth > tempBox.min.x && originalPos.x + playerWidth <= tempBox.min.x + collisionOffset) { playerPos.x = tempBox.min.x - playerWidth - collisionOffset; velocity.x = 0; break; } if (velocity.x < 0 && playerPos.x - playerWidth < tempBox.max.x && originalPos.x - playerWidth >= tempBox.max.x - collisionOffset) { playerPos.x = tempBox.max.x + playerWidth + collisionOffset; velocity.x = 0; break; } } }
+
+                // --- Z-AXIS COLLISION ---
+                playerPos.z += velocity.z * delta;
+                for (const item of nearbyBlocks) { if (item.userData.isWater) continue; tempBox.setFromObject(item); const playerFeet = playerPos.y - playerHalfHeight; const playerHead = playerPos.y + playerHalfHeight; if (playerHead > tempBox.min.y && playerFeet < tempBox.max.y && playerPos.x + playerWidth > tempBox.min.x && playerPos.x - playerWidth < tempBox.max.x) { if (velocity.z > 0 && playerPos.z + playerWidth > tempBox.min.z && originalPos.z + playerWidth <= tempBox.min.z + collisionOffset) { playerPos.z = tempBox.min.z - playerWidth - collisionOffset; velocity.z = 0; break; } if (velocity.z < 0 && playerPos.z - playerWidth < tempBox.max.z && originalPos.z - playerWidth >= tempBox.max.z - collisionOffset) { playerPos.z = tempBox.max.z + playerWidth + collisionOffset; velocity.z = 0; break; } } }
+
+            } else { // Noclip enabled: Apply movement directly
+                 playerPos.y += velocity.y * delta;
+                 playerPos.x += velocity.x * delta;
+                 playerPos.z += velocity.z * delta;
+                 onGround = false; canJump = false;
             }
-            // Apply Y results
-            if (hitGround) { playerPos.y = highestGroundY + playerHalfHeight + 0.001; velocity.y = 0; onGround = true; canJump = true; } // Added epsilon
-            else if (hitCeiling) { playerPos.y = originalPos.y; if (velocity.y > 0) velocity.y = 0; onGround = false; } // Prevent position update if ceiling hit
-            else { playerPos.y = anticipatedPlayerY; onGround = false; if (wasOnGround) canJump = false; }
 
-
-            // --- X-AXIS COLLISION ---
-            playerPos.x += velocity.x * delta;
-            const collisionOffset = 0.03; // Offset from previous update
-            for (const item of nearbyBlocks) { /* ... (no changes) ... */
-                 if (item.userData.isWater) continue; tempBox.setFromObject(item); const playerFeet = playerPos.y - playerHalfHeight; const playerHead = playerPos.y + playerHalfHeight; if (playerHead > tempBox.min.y && playerFeet < tempBox.max.y && playerPos.z + playerWidth > tempBox.min.z && playerPos.z - playerWidth < tempBox.max.z) { if (velocity.x > 0 && playerPos.x + playerWidth > tempBox.min.x && originalPos.x + playerWidth <= tempBox.min.x + collisionOffset) { playerPos.x = tempBox.min.x - playerWidth - collisionOffset; velocity.x = 0; break; } if (velocity.x < 0 && playerPos.x - playerWidth < tempBox.max.x && originalPos.x - playerWidth >= tempBox.max.x - collisionOffset) { playerPos.x = tempBox.max.x + playerWidth + collisionOffset; velocity.x = 0; break; } }
-            }
-
-             // --- Z-AXIS COLLISION ---
-             playerPos.z += velocity.z * delta;
-             for (const item of nearbyBlocks) { /* ... (no changes) ... */
-                 if (item.userData.isWater) continue; tempBox.setFromObject(item); const playerFeet = playerPos.y - playerHalfHeight; const playerHead = playerPos.y + playerHalfHeight; if (playerHead > tempBox.min.y && playerFeet < tempBox.max.y && playerPos.x + playerWidth > tempBox.min.x && playerPos.x - playerWidth < tempBox.max.x) { if (velocity.z > 0 && playerPos.z + playerWidth > tempBox.min.z && originalPos.z + playerWidth <= tempBox.min.z + collisionOffset) { playerPos.z = tempBox.min.z - playerWidth - collisionOffset; velocity.z = 0; break; } if (velocity.z < 0 && playerPos.z - playerWidth < tempBox.max.z && originalPos.z - playerWidth >= tempBox.max.z - collisionOffset) { playerPos.z = tempBox.max.z + playerWidth + collisionOffset; velocity.z = 0; break; } }
-             }
 
             // Fallback / Safety Net
-            if (playerPos.y < -50) { /* ... (no changes) ... */
-                console.warn("Player fell through world, resetting position."); playerPos.set(startX * blockSize, startY, startZ * blockSize); velocity.set(0, 0, 0); onGround = true; canJump = true; isInWater = false;
-             }
+            if (playerPos.y < -50) { console.warn("Player fell through world, resetting position."); playerPos.set(startX * blockSize, startY, startZ * blockSize); velocity.set(0, 0, 0); onGround = true; canJump = true; isInWater = false; }
 
-            renderer.render(scene, camera);
+            // renderer.render(scene, camera); // Moved to top
         }
     </script>
 </body>
