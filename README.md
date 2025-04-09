@@ -4,6 +4,8 @@ A Minecraft-inspired game, written entirely with Gemini AI 2.5 using Threes.js a
 
 Create a Minecraft clone using Three.js (WebGLRenderer, no antialiasing), HTML, CSS, and JavaScript.
 
+**The Promt:**
+
 **World:**
 * Generate a procedural world (default 48x48) using Perlin noise terrain.
 * Include grass, dirt, and stone blocks based on height. Generate water blocks below Y=-1 (sea level). Max terrain height around 15.
