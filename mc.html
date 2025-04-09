@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <title>Minecraft Klon (2D Sonne)</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        body { margin: 0; overflow: hidden; font-family: Monospace; background-color: #87CEEB; color: #333; }
+        canvas { display: block; }
+        #blocker, #menu { position: absolute; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 10; color: white; }
+        #menu { display: none; flex-direction: column; text-align: center; }
+        .menu-content { background-color: rgba(50, 50, 50, 0.9); padding: 30px; border-radius: 10px; display: flex; flex-direction: column; gap: 15px; min-width: 300px; }
+        .menu-content label { display: block; margin-bottom: 5px; font-weight: bold; text-align: left; }
+        .menu-content .checkbox-label { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+        .menu-content .checkbox-label input { margin-left: 10px; transform: scale(1.2); }
+        .menu-content input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ccc; width: 80px; text-align: center; margin-left: 10px; }
+        .menu-content div { display: flex; justify-content: space-between; align-items: center; }
+        .menu-content button { padding: 10px 15px; border: none; border-radius: 5px; background-color: #666; color: white; font-size: 16px; cursor: pointer; transition: background-color 0.2s; margin-top: 10px; }
+        .menu-content button:hover { background-color: #888; }
+        .menu-content button:active { background-color: #555; }
+        #instructions { width: 50%; max-width: 400px; background-color: rgba(50, 50, 50, 0.8); padding: 20px; border-radius: 10px; text-align: center; font-size: 16px; cursor: pointer; color: #ffffff; }
+        #instructions:hover { background-color: rgba(70, 70, 70, 0.9); }
+        .crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border-top: 2px solid white; border-bottom: 2px solid white; border-left: 2px solid white; border-right: 2px solid white; box-sizing: border-box; transform: translate(-50%, -50%); pointer-events: none; opacity: 0.5; display: none; z-index: 5; }
+        .crosshair::after { content: ''; position: absolute; top: 50%; left: 50%; width: 2px; height: 2px; background-color: white; transform: translate(-50%, -50%); }
+        #block-selector { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; background-color: rgba(0, 0, 0, 0.3); padding: 8px; border-radius: 5px; z-index: 5; }
+        .block-option { width: 40px; height: 40px; border: 2px solid #555; cursor: pointer; background-size: cover; image-rendering: pixelated; image-rendering: -moz-crisp-edges; image-rendering: crisp-edges; }
+        .block-option.selected { border: 3px solid #fff; box-shadow: 0 0 10px #fff; }
+        #coordsDisplay { position: absolute; top: 10px; left: 10px; background-color: rgba(0, 0, 0, 0.4); color: white; padding: 5px 10px; border-radius: 3px; font-size: 14px; z-index: 4; display: block; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div id="blocker"> <div id="instructions"> Klicken zum Spielen<br /> (W = Vorwärts, S = Rückwärts)<br> (A = Links, D = Rechts)<br> (Doppel-W = Sprinten)<br> (Maus = Umschauen, Leertaste = Springen, Shift = Ducken)<br> <small>(Linksklick = Platzierten Block entfernen)</small><br> <small>(Rechtsklick = Block setzen)</small><br> <small>(Blocktyp unten auswählen)</small><br> <small>(ESC = Menü öffnen/schließen)</small><br> <small style="color: #ffcc00;">(Kollisions-Optimierung aktiv)</small> </div> </div>
+    <div id="menu"> <div class="menu-content"> <h2>Menü</h2> <div> <label for="worldWidthInput">Weltbreite:</label> <input type="number" id="worldWidthInput" min="16" max="128" step="16"> </div> <div> <label for="worldDepthInput">Welttiefe:</label> <input type="number" id="worldDepthInput" min="16" max="128" step="16"> </div> <label class="checkbox-label" for="showCoordsCheckbox"> Koordinaten anzeigen <input type="checkbox" id="showCoordsCheckbox"> </label> <button id="restartButton">Neu Generieren</button> <button id="resumeButton">Fortsetzen</button> </div> </div>
+    <div id="coordsDisplay">X: 0.0 | Y: 0.0 | Z: 0.0</div>
+    <div class="crosshair" id="crosshair"></div>
+    <div id="block-selector"></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+        import { ImprovedNoise } from 'three/addons/math/ImprovedNoise.js';
+
+        // --- Global Variables ---
+        let camera, scene, renderer, controls;
+        const dynamicObjects = [];
+        let raycaster;
+        const cloudMeshes = [];
+
+        // Movement
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+        let canJump = false, isShiftDown = false, onGround = false, isInWater = false;
+        let prevTime = performance.now();
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+        let isSprinting = false;
+        let lastWPressTime = 0;
+        const doubleTapDelay = 300;
+
+        // Player dimensions
+        const playerHeightStanding = 2.1;
+        const playerHeightCrouching = 0.9;
+        const crouchPositionOffsetY = 0.6;
+
+        // World Settings
+        let worldWidth = 48, worldDepth = 48;
+        let worldHalfWidth = worldWidth / 2, worldHalfDepth = worldDepth / 2;
+        const blockSize = 1;
+        const maxTerrainHeight = 15;
+        const seaLevel = -1;
+
+        // Block Materials & Selection
+        let grassMaterial, dirtMaterial, stoneMaterial, waterMaterial, cloudMaterial;
+        const blockMaterials = {};
+        let selectedBlockType = 'grass';
+        const cubeGeometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
+
+        // --- Spatial Grid ---
+        let spatialGrid = {};
+        const cellSize = 4;
+
+        // --- Terrain Data ---
+        let terrainData;
+        let startX, startY, startZ;
+
+        // Game State
+        let isGamePaused = false;
+        let showCoords = true;
+
+        // DOM Elements
+        let coordsDisplayElement;
+
+        // --- Texture Generation ---
+        function createPixelTexture(c1, c2, c3, size = 16) { /* ... (no changes) ... */
+            const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size; const context = canvas.getContext('2d'); context.imageSmoothingEnabled = false; for (let y = 0; y < size; y++) { for (let x = 0; x < size; x++) { const rand = Math.random(); if (rand < 0.6) context.fillStyle = c1; else if (rand < 0.85) context.fillStyle = c2; else context.fillStyle = c3; context.fillRect(x, y, 1, 1); } } const texture = new THREE.CanvasTexture(canvas); texture.magFilter = THREE.NearestFilter; texture.minFilter = THREE.NearestFilter; texture.colorSpace = THREE.SRGBColorSpace; return texture;
+         }
+        function createWaterTexture(c1 = '#4488FF', c2 = '#3377EE', c3 = '#5599FF', size = 16) { /* ... (no changes) ... */
+             const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size; const context = canvas.getContext('2d'); context.imageSmoothingEnabled = false; for (let y = 0; y < size; y++) { for (let x = 0; x < size; x++) { const rand = Math.random(); let baseColor = c1; if (Math.sin(x * 0.8 + y * 0.4) > 0.3) baseColor = c2; if (rand < 0.7) context.fillStyle = baseColor; else context.fillStyle = c3; context.fillRect(x, y, 1, 1); } } const texture = new THREE.CanvasTexture(canvas); texture.magFilter = THREE.NearestFilter; texture.minFilter = THREE.NearestFilter; texture.colorSpace = THREE.SRGBColorSpace; return texture;
+         }
+
+        // --- Spatial Grid Helpers ---
+        function getCellCoords(x, z) { return { x: Math.floor(x / cellSize), z: Math.floor(z / cellSize) }; }
+        function getCellKey(cellX, cellZ) { return `${cellX}_${cellZ}`; }
+        function addObjectToGrid(obj) { /* ... (no changes) ... */
+            if (!(obj instanceof THREE.Mesh)) return; const pos = obj.position; const cellCoords = getCellCoords(pos.x, pos.z); const key = getCellKey(cellCoords.x, cellCoords.z); if (!spatialGrid[key]) spatialGrid[key] = []; if (!spatialGrid[key].includes(obj)) spatialGrid[key].push(obj);
+         }
+        function removeObjectFromGrid(obj) { /* ... (no changes) ... */
+             if (!(obj instanceof THREE.Mesh)) return; const pos = obj.position; const cellCoords = getCellCoords(pos.x, pos.z); const key = getCellKey(cellCoords.x, cellCoords.z); if (spatialGrid[key]) { const index = spatialGrid[key].indexOf(obj); if (index > -1) spatialGrid[key].splice(index, 1); }
+         }
+        function getNearbyBlocks(x, z, radius = 1) { /* ... (no changes) ... */
+            const nearby = new Set(); const centerCell = getCellCoords(x, z); for (let i = -radius; i <= radius; i++) { for (let j = -radius; j <= radius; j++) { const key = getCellKey(centerCell.x + i, centerCell.z + j); if (spatialGrid[key]) { spatialGrid[key].forEach(item => { if (item instanceof THREE.Mesh) { nearby.add(item); } }); } } } return Array.from(nearby);
+         }
+
+
+        // --- Initialization ---
+        window.onload = () => {
+            coordsDisplayElement = document.getElementById('coordsDisplay');
+            setupMenuControls();
+            init();
+            animate();
+        };
+
+        function generateHeight(width, height) { /* ... (no changes) ... */
+             const data = [], perlin = new ImprovedNoise(), size = width * height; const z = Math.random() * 100; let quality = 1; for (let j = 0; j < 4; j++) { if (j === 0) for (let i = 0; i < size; i++) data[i] = 0; for (let i = 0; i < size; i++) { const x = i % width, y = Math.floor(i / width); data[i] += perlin.noise(x / quality, y / quality, z) * quality; } quality *= 5; } return data;
+         }
+        function getY(x, z) { /* ... (no changes) ... */
+            const clampedX = Math.max(0, Math.min(worldWidth - 1, Math.floor(x + worldHalfWidth))); const clampedZ = Math.max(0, Math.min(worldDepth - 1, Math.floor(z + worldHalfDepth))); if (!terrainData) return 0; const height = Math.floor(terrainData[clampedX + clampedZ * worldWidth] * 0.1); return Math.min(maxTerrainHeight, Math.max(-5, height));
+         }
+
+        // --- Cloud Generation ---
+        function createCloud(basePosition, blockCount = 15, spread = 3) {
+            const cloudBlocksPos = [];
+            for (let i = 0; i < blockCount; i++) {
+                const offset = new THREE.Vector3( (Math.random() - 0.5) * spread * 2, (Math.random() - 0.5) * spread * 0.8, (Math.random() - 0.5) * spread * 2 ).floor().multiplyScalar(blockSize);
+                const blockPos = basePosition.clone().add(offset);
+                let exists = cloudBlocksPos.some(existingPos => existingPos.equals(blockPos));
+                if (!exists) {
+                    const block = new THREE.Mesh(cubeGeometry, cloudMaterial);
+                    block.position.copy(blockPos);
+                    scene.add(block);
+                    cloudMeshes.push(block);
+                    cloudBlocksPos.push(blockPos);
+                }
+            }
+        }
+
+
+        // Main initialization function
+        function init() {
+            console.log(`Initializing world: ${worldWidth}x${worldDepth}`);
+            isGamePaused = false;
+            if (scene) {
+                 cloudMeshes.forEach(cloud => scene.remove(cloud)); cloudMeshes.length = 0;
+                while(scene.children.length > 0){ const obj = scene.children[0]; scene.remove(obj); if (obj instanceof THREE.Mesh && obj.geometry) obj.geometry.dispose(); if (obj instanceof THREE.Mesh && obj.material) { if (obj.material.map && obj.material.map.dispose) obj.material.map.dispose(); obj.material.dispose(); } }
+             }
+             dynamicObjects.length = 0; spatialGrid = {};
+            terrainData = generateHeight(worldWidth, worldDepth);
+            const grassTexture = createPixelTexture('#559022', '#66bb66', '#447711'); const dirtTexture = createPixelTexture('#8B4513', '#A0522D', '#654321'); const stoneTexture = createPixelTexture('#808080', '#A9A9A9', '#696969'); const waterTexture = createWaterTexture(); const cloudTexture = createPixelTexture('#FFFFFF', '#F0F0F0', '#E0E0E0'); grassMaterial = new THREE.MeshLambertMaterial({ map: grassTexture }); dirtMaterial = new THREE.MeshLambertMaterial({ map: dirtTexture }); stoneMaterial = new THREE.MeshLambertMaterial({ map: stoneTexture }); waterMaterial = new THREE.MeshLambertMaterial({ map: waterTexture, transparent: true, opacity: 0.75 });
+            cloudMaterial = new THREE.MeshLambertMaterial({ map: cloudTexture, transparent: true, opacity: 0.8 });
+            blockMaterials['grass'] = grassMaterial; blockMaterials['dirt'] = dirtMaterial; blockMaterials['stone'] = stoneMaterial; blockMaterials['water'] = waterMaterial;
+            scene = new THREE.Scene(); scene.background = new THREE.Color(0x87CEEB);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000); startX = 0; startZ = 0; startY = (getY(startX, startZ) + (playerHeightStanding / 2) + 0.1) * blockSize; startY = Math.max(startY, (seaLevel + playerHeightStanding / 2 + 0.1) * blockSize); camera.position.set(startX * blockSize, startY, startZ * blockSize);
+            if (!renderer) { renderer = new THREE.WebGLRenderer({ antialias: false }); renderer.setPixelRatio(window.devicePixelRatio); renderer.setSize(window.innerWidth, window.innerHeight); document.body.appendChild(renderer.domElement); }
+            const hemisphereLight = new THREE.HemisphereLight(0xeeeeff, 0x777788, 1.0); scene.add(hemisphereLight); const directionalLight = new THREE.DirectionalLight(0xffffff, 1.8); directionalLight.position.set(50, 80, 30); scene.add(directionalLight);
+            if (!controls) { controls = new PointerLockControls(camera, document.body); setupControlListeners(); } scene.add(controls.getObject());
+            if (!raycaster) { raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, 0, -1), 0, 6 * blockSize); document.addEventListener('mousedown', onMouseDown); }
+
+            // --- Sun (Changed to 2D Plane) ---
+            const sunSize = 10; // Size of the sun plane
+            const sunGeometry = new THREE.PlaneGeometry(sunSize, sunSize); // *** Use PlaneGeometry ***
+            const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFF00, side: THREE.DoubleSide }); // Make sure both sides are visible
+            const sun = new THREE.Mesh(sunGeometry, sunMaterial);
+            sun.position.set(0, maxTerrainHeight + 30, -worldDepth * blockSize * 0.7); // Adjust Z to be visible
+            // Optional: Make sun always face camera (more complex, requires access in animate loop)
+            // sun.lookAt(camera.position); // Simple initial orientation towards origin
+            scene.add(sun);
+
+
+            // --- World Generation ---
+            console.log(`Generating world meshes and populating spatial grid (${worldWidth}x${worldDepth})...`); const generationStartTime = performance.now(); for (let x = -worldHalfWidth; x < worldHalfWidth; x++) { for (let z = -worldHalfDepth; z < worldHalfDepth; z++) { const terrainHeight = getY(x, z); const solidHeight = Math.max(terrainHeight, seaLevel); for (let y = -5; y < solidHeight; y++) { let material = stoneMaterial; if (y >= seaLevel && y >= terrainHeight - 1) material = grassMaterial; else if (y >= seaLevel && y >= terrainHeight - 4) material = dirtMaterial; if (y < seaLevel && terrainHeight <= y) continue; const block = new THREE.Mesh(cubeGeometry, material); block.position.set( x * blockSize + blockSize / 2, y * blockSize + blockSize / 2, z * blockSize + blockSize / 2 ); scene.add(block); addObjectToGrid(block); } if (terrainHeight < seaLevel) { for (let y = terrainHeight; y < seaLevel; y++) { const waterBlock = new THREE.Mesh(cubeGeometry, waterMaterial); waterBlock.position.set( x * blockSize + blockSize / 2, y * blockSize + blockSize / 2, z * blockSize + blockSize / 2 ); waterBlock.userData.isWater = true; scene.add(waterBlock); addObjectToGrid(waterBlock); } } } } const generationEndTime = performance.now(); console.log(`World generation took ${(generationEndTime - generationStartTime).toFixed(2)} ms`);
+
+            // --- Cloud Generation ---
+            const cloudBaseHeight = maxTerrainHeight + 15;
+            const numClouds = 15; // Keep number from original code
+            for (let i = 0; i < numClouds; i++) {
+                const cloudX = (Math.random() - 0.5) * worldWidth * blockSize * 1.5; const cloudZ = (Math.random() - 0.5) * worldDepth * blockSize * 1.5; const cloudY = cloudBaseHeight + (Math.random() - 0.5) * 5;
+                createCloud(new THREE.Vector3(cloudX, cloudY, cloudZ), 10 + Math.random() * 15, 3 + Math.random() * 2);
+            }
+            console.log(`Generated ${cloudMeshes.length} cloud blocks.`);
+
+
+            // Setup UI & Resize Listener
+            setupBlockSelectorUI(); if (!window.onresize) { window.addEventListener('resize', onWindowResize); } document.getElementById('worldWidthInput').value = worldWidth; document.getElementById('worldDepthInput').value = worldDepth;
+            coordsDisplayElement.style.display = showCoords ? 'block' : 'none';
+        }
+
+        // --- Setup Listeners (Called once) ---
+        function setupControlListeners() { /* ... (Crouch position fix included) ... */
+             const blocker = document.getElementById('blocker'); const instructions = document.getElementById('instructions'); const crosshair = document.getElementById('crosshair'); const menu = document.getElementById('menu'); instructions.addEventListener('click', () => { controls.lock(); }); controls.addEventListener('lock', () => { if (!isGamePaused) { blocker.style.display = 'none'; crosshair.style.display = 'block'; menu.style.display = 'none'; } }); controls.addEventListener('unlock', () => { if (!isGamePaused) { blocker.style.display = 'flex'; } crosshair.style.display = 'none'; });
+             const onKeyDown = (event) => {
+                if (event.code === 'Escape') { toggleMenu(); return; }
+                if (isGamePaused) return;
+                switch (event.code) {
+                    case 'KeyW': const timeNow = performance.now(); if (timeNow - lastWPressTime < doubleTapDelay) { isSprinting = true; } lastWPressTime = timeNow; moveForward = true; break;
+                    case 'KeyA': moveLeft = true; break;
+                    case 'KeyS': moveBackward = true; isSprinting = false; break;
+                    case 'KeyD': moveRight = true; break;
+                    case 'Space': if (onGround || isInWater || canJump) { velocity.y += isInWater ? 6.0 : 10.0; canJump = false; onGround = false; isInWater = false; isSprinting = false;} break;
+                    case 'ShiftLeft': case 'ShiftRight': if (!isShiftDown && controls) { controls.getObject().position.y -= crouchPositionOffsetY; } isShiftDown = true; isSprinting = false; break;
+                    case 'Digit1': selectBlock('grass'); break;
+                    case 'Digit2': selectBlock('dirt'); break;
+                    case 'Digit3': selectBlock('stone'); break;
+                    case 'Digit4': selectBlock('water'); break;
+                }
+            };
+            const onKeyUp = (event) => {
+                 if (isGamePaused && event.code !== 'Escape') return;
+                switch (event.code) {
+                    case 'KeyW': moveForward = false; isSprinting = false; break;
+                    case 'KeyA': moveLeft = false; break;
+                    case 'KeyS': moveBackward = false; break;
+                    case 'KeyD': moveRight = false; break;
+                    case 'ShiftLeft': case 'ShiftRight': if (isShiftDown && controls) { controls.getObject().position.y += crouchPositionOffsetY; } isShiftDown = false; break;
+                }
+            };
+            document.addEventListener('keydown', onKeyDown); document.addEventListener('keyup', onKeyUp);
+         }
+        function setupMenuControls() { /* ... (no changes) ... */
+             const menu = document.getElementById('menu'); const resumeButton = document.getElementById('resumeButton'); const restartButton = document.getElementById('restartButton'); const widthInput = document.getElementById('worldWidthInput'); const depthInput = document.getElementById('worldDepthInput'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox'); resumeButton.addEventListener('click', toggleMenu); restartButton.addEventListener('click', () => { const newWidth = parseInt(widthInput.value, 10); const newDepth = parseInt(depthInput.value, 10); if (isNaN(newWidth) || isNaN(newDepth) || newWidth < 16 || newWidth > 128 || newDepth < 16 || newDepth > 128) { alert("Bitte gültige Weltgröße eingeben (Breite/Tiefe: 16-128)."); return; } worldWidth = newWidth; worldDepth = newDepth; worldHalfWidth = worldWidth / 2; worldHalfDepth = worldDepth / 2; menu.style.display = 'none'; isGamePaused = false; init(); controls.lock(); }); showCoordsCheckbox.addEventListener('change', () => { showCoords = showCoordsCheckbox.checked; coordsDisplayElement.style.display = showCoords ? 'block' : 'none'; console.log("Show Coords:", showCoords); }); widthInput.value = worldWidth; depthInput.value = worldDepth; showCoordsCheckbox.checked = showCoords;
+         }
+        function toggleMenu() { /* ... (no changes) ... */
+            const menu = document.getElementById('menu'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox'); isGamePaused = !isGamePaused; if (isGamePaused) { showCoordsCheckbox.checked = showCoords; menu.style.display = 'flex'; controls.unlock(); } else { menu.style.display = 'none'; controls.lock(); } console.log("Game Paused:", isGamePaused);
+         }
+
+        function onWindowResize() { /* ... (no changes) ... */
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+         }
+        function setupBlockSelectorUI() { /* ... (no changes) ... */
+            const selector = document.getElementById('block-selector'); selector.innerHTML = ''; Object.keys(blockMaterials).forEach(type => { const option = document.createElement('div'); option.classList.add('block-option'); option.dataset.type = type; const material = blockMaterials[type]; const texture = material.map; if (texture && texture.image instanceof HTMLCanvasElement) { option.style.backgroundImage = `url(${texture.image.toDataURL()})`; } else { option.style.backgroundColor = material.color ? `#${material.color.getHexString()}` : '#ccc'; } if (type === 'water') { option.style.opacity = '0.75'; } else { option.style.opacity = '1'; } option.addEventListener('click', () => { selectBlock(type); }); selector.appendChild(option); }); updateSelectedBlockHighlight();
+         }
+        function selectBlock(type) { /* ... (no changes) ... */
+             if (blockMaterials[type]) { selectedBlockType = type; console.log("Selected block:", selectedBlockType); updateSelectedBlockHighlight(); }
+         }
+        function updateSelectedBlockHighlight() { /* ... (no changes) ... */
+            const options = document.querySelectorAll('.block-option'); options.forEach(opt => { if (opt.dataset.type === selectedBlockType) opt.classList.add('selected'); else opt.classList.remove('selected'); });
+         }
+
+        // --- Mouse Interaction ---
+        function onMouseDown(event) { /* ... (no changes) ... */
+            if (isGamePaused || !controls.isLocked) return; raycaster.setFromCamera({ x: 0, y: 0 }, camera); const nearbyObjectsForRaycast = getNearbyBlocks(controls.getObject().position.x, controls.getObject().position.z, 2); const intersects = raycaster.intersectObjects(nearbyObjectsForRaycast, false); if (intersects.length > 0) { const intersect = intersects[0]; if (intersect.distance > 6 * blockSize) return; if (event.button === 0) { if (intersect.object.position.y < (-4 * blockSize)) return; removeObjectFromGrid(intersect.object); const index = dynamicObjects.indexOf(intersect.object); if (index > -1) dynamicObjects.splice(index, 1); scene.remove(intersect.object); console.log("Removed block."); } else if (event.button === 2) { const placementPos = new THREE.Vector3().copy(intersect.point).add(intersect.face.normal.clone().multiplyScalar(0.01)); placementPos.divideScalar(blockSize).floor().multiplyScalar(blockSize).addScalar(blockSize / 2); let occupied = false; const nearbyForPlacementCheck = getNearbyBlocks(placementPos.x, placementPos.z, 0); for (const obj of nearbyForPlacementCheck) { if (obj.position.distanceToSquared(placementPos) < 0.1) { occupied = true; break; } } const playerHeight = isShiftDown ? playerHeightCrouching : playerHeightStanding; const playerWidth = 0.4 * blockSize; const playerHeadPos = controls.getObject().position.clone().add(new THREE.Vector3(0, playerHeight/2 - 0.1, 0)); const playerFeetPos = controls.getObject().position.clone().add(new THREE.Vector3(0, -playerHeight/2 + 0.1, 0)); const newBlockBox = new THREE.Box3().setFromCenterAndSize(placementPos, new THREE.Vector3(blockSize, blockSize, blockSize)); if (!occupied && !(newBlockBox.containsPoint(playerHeadPos) || newBlockBox.containsPoint(playerFeetPos) || (Math.abs(placementPos.x - controls.getObject().position.x) < playerWidth + blockSize/2 && Math.abs(placementPos.z - controls.getObject().position.z) < playerWidth + blockSize/2 && placementPos.y > playerFeetPos.y && placementPos.y < playerHeadPos.y))) { const selectedMaterial = blockMaterials[selectedBlockType] || stoneMaterial; const voxel = new THREE.Mesh(cubeGeometry, selectedMaterial); voxel.position.copy(placementPos); if (selectedBlockType === 'water') { voxel.userData.isWater = true; } scene.add(voxel); dynamicObjects.push(voxel); addObjectToGrid(voxel); } else { console.log("Cannot place block here (occupied or inside player)."); } } } else { console.log("No block intersected."); }
+         }
+
+
+        // --- Animation Loop ---
+        const cloudSpeed = 0.5;
+        const cloudWrapMargin = 10;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now();
+            const delta = Math.min(0.1, (time - prevTime) / 1000);
+            prevTime = time;
+
+            // --- Cloud Movement ---
+            const wrapBoundaryX = worldHalfWidth * blockSize + cloudWrapMargin;
+            cloudMeshes.forEach(cloud => {
+                cloud.position.x += cloudSpeed * delta;
+                if (cloud.position.x > wrapBoundaryX) {
+                    cloud.position.x = -wrapBoundaryX;
+                    cloud.position.z = (Math.random() - 0.5) * worldDepth * blockSize * 1.5;
+                }
+            });
+
+
+            if (showCoords && coordsDisplayElement) { const playerPos = controls.getObject().position; coordsDisplayElement.textContent = `X: ${playerPos.x.toFixed(1)} | Y: ${playerPos.y.toFixed(1)} | Z: ${playerPos.z.toFixed(1)}`; }
+            if (isGamePaused || !controls.isLocked) { renderer.render(scene, camera); return; }
+
+            const playerHeight = isShiftDown ? playerHeightCrouching : playerHeightStanding;
+            const playerHalfHeight = playerHeight / 2;
+            const gravity = 30.0;
+            let baseMoveSpeed;
+            if (isSprinting && !isShiftDown) { baseMoveSpeed = 50.0; }
+            else if (isShiftDown) { baseMoveSpeed = 12.5; }
+            else { baseMoveSpeed = 25.0; }
+            const jumpVelocity = 10.0;
+            const damping = 10.0;
+            isInWater = false;
+
+            const playerPos = controls.getObject().position;
+            const originalPos = playerPos.clone();
+            const playerWidth = 0.4 * blockSize;
+            let wasOnGround = onGround;
+            onGround = false;
+
+            const nearbyBlocks = getNearbyBlocks(playerPos.x, playerPos.z);
+            const tempBox = new THREE.Box3();
+
+            // Check if in water
+            const playerFeetCheckY = playerPos.y - playerHalfHeight + 0.1; const playerHeadCheckY = playerPos.y + playerHalfHeight - 0.1;
+            for (const obj of nearbyBlocks) { if (obj.userData.isWater) { tempBox.setFromObject(obj); if (playerPos.x > tempBox.min.x && playerPos.x < tempBox.max.x && playerPos.z > tempBox.min.z && playerPos.z < tempBox.max.z && playerHeadCheckY > tempBox.min.y && playerFeetCheckY < tempBox.max.y) { isInWater = true; break; } } }
+
+            // Adjust physics
+            const currentGravity = isInWater ? gravity * 0.5 : gravity; const currentMoveSpeed = isInWater ? baseMoveSpeed * 0.5 : baseMoveSpeed; const currentDamping = isInWater ? damping * 2.0 : damping;
+
+            // Apply Gravity & Damping
+            if (!onGround || velocity.y > 0) velocity.y -= currentGravity * delta;
+            velocity.x -= velocity.x * currentDamping * delta;
+            velocity.z -= velocity.z * currentDamping * delta;
+
+            // Calculate Movement & Apply Velocity
+            direction.z = Number(moveForward) - Number(moveBackward); direction.x = Number(moveRight) - Number(moveLeft); direction.normalize();
+            const cameraDirection = controls.getDirection(new THREE.Vector3(0, 0, -1)); const rightDirection = new THREE.Vector3().crossVectors(camera.up, cameraDirection).normalize(); const moveFactor = currentMoveSpeed * delta;
+            velocity.x += cameraDirection.x * direction.z * moveFactor; velocity.z += cameraDirection.z * direction.z * moveFactor;
+            velocity.x -= rightDirection.x * direction.x * moveFactor; // A/D Fixed Sign
+            velocity.z -= rightDirection.z * direction.x * moveFactor; // A/D Fixed Sign
+
+            // --- Y-AXIS COLLISION ---
+            let hitGround = false;
+            let hitCeiling = false;
+            let highestGroundY = -Infinity;
+            const verticalMovement = velocity.y * delta;
+            const anticipatedPlayerY = playerPos.y + verticalMovement;
+            const groundCheckTolerance = 0.1;
+            const ceilingCheckTolerance = 0.2;
+            const verticalProximityLimit = 1.5 * blockSize;
+
+            for (const item of nearbyBlocks) {
+                if (item.userData.isWater) continue;
+                const itemPos = item.position;
+                tempBox.setFromObject(item);
+                const blockTopY = tempBox.max.y; const blockBottomY = tempBox.min.y;
+                const playerFeet = anticipatedPlayerY - playerHalfHeight; const playerHead = anticipatedPlayerY + playerHalfHeight;
+                const horizontalOverlapMargin = 0.001;
+
+                if (playerPos.x + playerWidth > tempBox.min.x + horizontalOverlapMargin && playerPos.x - playerWidth < tempBox.max.x - horizontalOverlapMargin &&
+                    playerPos.z + playerWidth > tempBox.min.z + horizontalOverlapMargin && playerPos.z - playerWidth < tempBox.max.z - horizontalOverlapMargin)
+                {
+                    // Ceiling Check FIRST
+                    if (velocity.y > 0 && playerHead > blockBottomY - ceilingCheckTolerance &&
+                        originalPos.y + playerHalfHeight <= blockBottomY + ceilingCheckTolerance)
+                    { velocity.y = 0; hitCeiling = true; }
+                    // Ground Check
+                    if (velocity.y <= 0 && playerFeet < blockTopY + groundCheckTolerance &&
+                        originalPos.y - playerHalfHeight >= blockTopY - groundCheckTolerance &&
+                        originalPos.y - playerHalfHeight < blockTopY + verticalProximityLimit)
+                    { if (blockTopY > highestGroundY) { highestGroundY = blockTopY; } hitGround = true; }
+                }
+            }
+            // Apply Y results
+            if (hitGround) { playerPos.y = highestGroundY + playerHalfHeight + 0.001; velocity.y = 0; onGround = true; canJump = true; } // Added epsilon
+            else if (hitCeiling) { playerPos.y = originalPos.y; if (velocity.y > 0) velocity.y = 0; onGround = false; } // Prevent position update if ceiling hit
+            else { playerPos.y = anticipatedPlayerY; onGround = false; if (wasOnGround) canJump = false; }
+
+
+            // --- X-AXIS COLLISION ---
+            playerPos.x += velocity.x * delta;
+            const collisionOffset = 0.03; // Offset from previous update
+            for (const item of nearbyBlocks) { /* ... (no changes) ... */
+                 if (item.userData.isWater) continue; tempBox.setFromObject(item); const playerFeet = playerPos.y - playerHalfHeight; const playerHead = playerPos.y + playerHalfHeight; if (playerHead > tempBox.min.y && playerFeet < tempBox.max.y && playerPos.z + playerWidth > tempBox.min.z && playerPos.z - playerWidth < tempBox.max.z) { if (velocity.x > 0 && playerPos.x + playerWidth > tempBox.min.x && originalPos.x + playerWidth <= tempBox.min.x + collisionOffset) { playerPos.x = tempBox.min.x - playerWidth - collisionOffset; velocity.x = 0; break; } if (velocity.x < 0 && playerPos.x - playerWidth < tempBox.max.x && originalPos.x - playerWidth >= tempBox.max.x - collisionOffset) { playerPos.x = tempBox.max.x + playerWidth + collisionOffset; velocity.x = 0; break; } }
+            }
+
+             // --- Z-AXIS COLLISION ---
+             playerPos.z += velocity.z * delta;
+             for (const item of nearbyBlocks) { /* ... (no changes) ... */
+                 if (item.userData.isWater) continue; tempBox.setFromObject(item); const playerFeet = playerPos.y - playerHalfHeight; const playerHead = playerPos.y + playerHalfHeight; if (playerHead > tempBox.min.y && playerFeet < tempBox.max.y && playerPos.x + playerWidth > tempBox.min.x && playerPos.x - playerWidth < tempBox.max.x) { if (velocity.z > 0 && playerPos.z + playerWidth > tempBox.min.z && originalPos.z + playerWidth <= tempBox.min.z + collisionOffset) { playerPos.z = tempBox.min.z - playerWidth - collisionOffset; velocity.z = 0; break; } if (velocity.z < 0 && playerPos.z - playerWidth < tempBox.max.z && originalPos.z - playerWidth >= tempBox.max.z - collisionOffset) { playerPos.z = tempBox.max.z + playerWidth + collisionOffset; velocity.z = 0; break; } }
+             }
+
+            // Fallback / Safety Net
+            if (playerPos.y < -50) { /* ... (no changes) ... */
+                console.warn("Player fell through world, resetting position."); playerPos.set(startX * blockSize, startY, startZ * blockSize); velocity.set(0, 0, 0); onGround = true; canJump = true; isInWater = false;
+             }
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
