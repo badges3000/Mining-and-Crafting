@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-    <title>Minecraft Klon (2D Sonne)</title>
+    <title>Minecraft Klon (Sun/Moon Fix)</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
     <style>
@@ -53,7 +53,7 @@
         let camera, scene, renderer, controls;
         const dynamicObjects = [];
         let raycaster;
-        const cloudMeshes = [];
+        let sun, moon;
 
         // Movement
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
@@ -78,7 +78,7 @@
         const seaLevel = -1;
 
         // Block Materials & Selection
-        let grassMaterial, dirtMaterial, stoneMaterial, waterMaterial, cloudMaterial;
+        let grassMaterial, dirtMaterial, stoneMaterial, waterMaterial;
         const blockMaterials = {};
         let selectedBlockType = 'grass';
         const cubeGeometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
@@ -94,9 +94,16 @@
         // Game State
         let isGamePaused = false;
         let showCoords = true;
+        let simulationTime = 0;
+        const dayMinutes = 18;
+        const nightMinutes = 6;
+        const totalCycleMinutes = dayMinutes + nightMinutes;
+        const totalCycleSeconds = totalCycleMinutes * 60;
+        const dayNightThreshold = dayMinutes / totalCycleMinutes; // Proportion of cycle that is day (0.75)
 
         // DOM Elements
         let coordsDisplayElement;
+        let blockerElement;
 
         // --- Texture Generation ---
         function createPixelTexture(c1, c2, c3, size = 16) { /* ... (no changes) ... */
@@ -123,6 +130,7 @@
         // --- Initialization ---
         window.onload = () => {
             coordsDisplayElement = document.getElementById('coordsDisplay');
+            blockerElement = document.getElementById('blocker');
             setupMenuControls();
             init();
             animate();
@@ -135,109 +143,93 @@
             const clampedX = Math.max(0, Math.min(worldWidth - 1, Math.floor(x + worldHalfWidth))); const clampedZ = Math.max(0, Math.min(worldDepth - 1, Math.floor(z + worldHalfDepth))); if (!terrainData) return 0; const height = Math.floor(terrainData[clampedX + clampedZ * worldWidth] * 0.1); return Math.min(maxTerrainHeight, Math.max(-5, height));
          }
 
-        // --- Cloud Generation ---
-        function createCloud(basePosition, blockCount = 15, spread = 3) {
-            const cloudBlocksPos = [];
-            for (let i = 0; i < blockCount; i++) {
-                const offset = new THREE.Vector3( (Math.random() - 0.5) * spread * 2, (Math.random() - 0.5) * spread * 0.8, (Math.random() - 0.5) * spread * 2 ).floor().multiplyScalar(blockSize);
-                const blockPos = basePosition.clone().add(offset);
-                let exists = cloudBlocksPos.some(existingPos => existingPos.equals(blockPos));
-                if (!exists) {
-                    const block = new THREE.Mesh(cubeGeometry, cloudMaterial);
-                    block.position.copy(blockPos);
-                    scene.add(block);
-                    cloudMeshes.push(block);
-                    cloudBlocksPos.push(blockPos);
-                }
-            }
-        }
+        // --- Cloud Generation Function Removed ---
 
 
         // Main initialization function
         function init() {
             console.log(`Initializing world: ${worldWidth}x${worldDepth}`);
             isGamePaused = false;
+            simulationTime = 0;
+
+            // --- Cleanup previous scene/controls if exists ---
             if (scene) {
-                 cloudMeshes.forEach(cloud => scene.remove(cloud)); cloudMeshes.length = 0;
+                 if (controls) { controls.dispose(); controls = null; }
+                 if (sun) scene.remove(sun); // Remove old sun
+                 if (moon) scene.remove(moon); // Remove old moon
                 while(scene.children.length > 0){ const obj = scene.children[0]; scene.remove(obj); if (obj instanceof THREE.Mesh && obj.geometry) obj.geometry.dispose(); if (obj instanceof THREE.Mesh && obj.material) { if (obj.material.map && obj.material.map.dispose) obj.material.map.dispose(); obj.material.dispose(); } }
              }
+             Object.keys(blockMaterials).forEach(key => { const mat = blockMaterials[key]; if (mat) { if (mat.map && mat.map.dispose) mat.map.dispose(); mat.dispose(); } delete blockMaterials[key]; });
+
              dynamicObjects.length = 0; spatialGrid = {};
             terrainData = generateHeight(worldWidth, worldDepth);
-            const grassTexture = createPixelTexture('#559022', '#66bb66', '#447711'); const dirtTexture = createPixelTexture('#8B4513', '#A0522D', '#654321'); const stoneTexture = createPixelTexture('#808080', '#A9A9A9', '#696969'); const waterTexture = createWaterTexture(); const cloudTexture = createPixelTexture('#FFFFFF', '#F0F0F0', '#E0E0E0'); grassMaterial = new THREE.MeshLambertMaterial({ map: grassTexture }); dirtMaterial = new THREE.MeshLambertMaterial({ map: dirtTexture }); stoneMaterial = new THREE.MeshLambertMaterial({ map: stoneTexture }); waterMaterial = new THREE.MeshLambertMaterial({ map: waterTexture, transparent: true, opacity: 0.75 });
-            cloudMaterial = new THREE.MeshLambertMaterial({ map: cloudTexture, transparent: true, opacity: 0.8 });
+
+            // Create Materials
+            const grassTexture = createPixelTexture('#559022', '#66bb66', '#447711'); const dirtTexture = createPixelTexture('#8B4513', '#A0522D', '#654321'); const stoneTexture = createPixelTexture('#808080', '#A9A9A9', '#696969'); const waterTexture = createWaterTexture();
+            grassMaterial = new THREE.MeshLambertMaterial({ map: grassTexture }); dirtMaterial = new THREE.MeshLambertMaterial({ map: dirtTexture }); stoneMaterial = new THREE.MeshLambertMaterial({ map: stoneTexture }); waterMaterial = new THREE.MeshLambertMaterial({ map: waterTexture, transparent: true, opacity: 0.75 });
             blockMaterials['grass'] = grassMaterial; blockMaterials['dirt'] = dirtMaterial; blockMaterials['stone'] = stoneMaterial; blockMaterials['water'] = waterMaterial;
+
             scene = new THREE.Scene(); scene.background = new THREE.Color(0x87CEEB);
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000); startX = 0; startZ = 0; startY = (getY(startX, startZ) + (playerHeightStanding / 2) + 0.1) * blockSize; startY = Math.max(startY, (seaLevel + playerHeightStanding / 2 + 0.1) * blockSize); camera.position.set(startX * blockSize, startY, startZ * blockSize);
             if (!renderer) { renderer = new THREE.WebGLRenderer({ antialias: false }); renderer.setPixelRatio(window.devicePixelRatio); renderer.setSize(window.innerWidth, window.innerHeight); document.body.appendChild(renderer.domElement); }
-            const hemisphereLight = new THREE.HemisphereLight(0xeeeeff, 0x777788, 1.0); scene.add(hemisphereLight); const directionalLight = new THREE.DirectionalLight(0xffffff, 1.8); directionalLight.position.set(50, 80, 30); scene.add(directionalLight);
-            if (!controls) { controls = new PointerLockControls(camera, document.body); setupControlListeners(); } scene.add(controls.getObject());
-            if (!raycaster) { raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, 0, -1), 0, 6 * blockSize); document.addEventListener('mousedown', onMouseDown); }
 
-            // --- Sun (Changed to 2D Plane) ---
-            const sunSize = 10; // Size of the sun plane
-            const sunGeometry = new THREE.PlaneGeometry(sunSize, sunSize); // *** Use PlaneGeometry ***
-            const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFF00, side: THREE.DoubleSide }); // Make sure both sides are visible
-            const sun = new THREE.Mesh(sunGeometry, sunMaterial);
-            sun.position.set(0, maxTerrainHeight + 30, -worldDepth * blockSize * 0.7); // Adjust Z to be visible
-            // Optional: Make sun always face camera (more complex, requires access in animate loop)
-            // sun.lookAt(camera.position); // Simple initial orientation towards origin
-            scene.add(sun);
+            // Lighting
+            const hemisphereLight = new THREE.HemisphereLight(0xeeeeff, 0x777788, 1.0); scene.add(hemisphereLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.8); directionalLight.position.set(50, 80, 30); scene.add(directionalLight);
+            scene.userData.hemisphereLight = hemisphereLight; scene.userData.directionalLight = directionalLight;
+
+            // Controls
+            controls = new PointerLockControls(camera, document.body); setupControlListeners(); scene.add(controls.getObject());
+
+            // Interaction Setup
+            if (!raycaster) { raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, 0, -1), 0, 6 * blockSize); }
+            document.addEventListener('mousedown', onMouseDown);
+
+            // --- Sun (2D Plane) ---
+            const sunSize = 10; const sunGeometry = new THREE.PlaneGeometry(sunSize, sunSize); const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFF00, side: THREE.DoubleSide, transparent: true });
+            sun = new THREE.Mesh(sunGeometry, sunMaterial); scene.add(sun);
+
+            // --- Moon (2D Plane) ---
+            const moonSize = 8; const moonGeometry = new THREE.PlaneGeometry(moonSize, moonSize); const moonMaterial = new THREE.MeshBasicMaterial({ color: 0xEEEEEE, side: THREE.DoubleSide, transparent: true });
+            moon = new THREE.Mesh(moonGeometry, moonMaterial); scene.add(moon);
 
 
             // --- World Generation ---
             console.log(`Generating world meshes and populating spatial grid (${worldWidth}x${worldDepth})...`); const generationStartTime = performance.now(); for (let x = -worldHalfWidth; x < worldHalfWidth; x++) { for (let z = -worldHalfDepth; z < worldHalfDepth; z++) { const terrainHeight = getY(x, z); const solidHeight = Math.max(terrainHeight, seaLevel); for (let y = -5; y < solidHeight; y++) { let material = stoneMaterial; if (y >= seaLevel && y >= terrainHeight - 1) material = grassMaterial; else if (y >= seaLevel && y >= terrainHeight - 4) material = dirtMaterial; if (y < seaLevel && terrainHeight <= y) continue; const block = new THREE.Mesh(cubeGeometry, material); block.position.set( x * blockSize + blockSize / 2, y * blockSize + blockSize / 2, z * blockSize + blockSize / 2 ); scene.add(block); addObjectToGrid(block); } if (terrainHeight < seaLevel) { for (let y = terrainHeight; y < seaLevel; y++) { const waterBlock = new THREE.Mesh(cubeGeometry, waterMaterial); waterBlock.position.set( x * blockSize + blockSize / 2, y * blockSize + blockSize / 2, z * blockSize + blockSize / 2 ); waterBlock.userData.isWater = true; scene.add(waterBlock); addObjectToGrid(waterBlock); } } } } const generationEndTime = performance.now(); console.log(`World generation took ${(generationEndTime - generationStartTime).toFixed(2)} ms`);
-
-            // --- Cloud Generation ---
-            const cloudBaseHeight = maxTerrainHeight + 15;
-            const numClouds = 15; // Keep number from original code
-            for (let i = 0; i < numClouds; i++) {
-                const cloudX = (Math.random() - 0.5) * worldWidth * blockSize * 1.5; const cloudZ = (Math.random() - 0.5) * worldDepth * blockSize * 1.5; const cloudY = cloudBaseHeight + (Math.random() - 0.5) * 5;
-                createCloud(new THREE.Vector3(cloudX, cloudY, cloudZ), 10 + Math.random() * 15, 3 + Math.random() * 2);
-            }
-            console.log(`Generated ${cloudMeshes.length} cloud blocks.`);
-
 
             // Setup UI & Resize Listener
             setupBlockSelectorUI(); if (!window.onresize) { window.addEventListener('resize', onWindowResize); } document.getElementById('worldWidthInput').value = worldWidth; document.getElementById('worldDepthInput').value = worldDepth;
             coordsDisplayElement.style.display = showCoords ? 'block' : 'none';
         }
 
-        // --- Setup Listeners (Called once) ---
-        function setupControlListeners() { /* ... (Crouch position fix included) ... */
-             const blocker = document.getElementById('blocker'); const instructions = document.getElementById('instructions'); const crosshair = document.getElementById('crosshair'); const menu = document.getElementById('menu'); instructions.addEventListener('click', () => { controls.lock(); }); controls.addEventListener('lock', () => { if (!isGamePaused) { blocker.style.display = 'none'; crosshair.style.display = 'block'; menu.style.display = 'none'; } }); controls.addEventListener('unlock', () => { if (!isGamePaused) { blocker.style.display = 'flex'; } crosshair.style.display = 'none'; });
-             const onKeyDown = (event) => {
-                if (event.code === 'Escape') { toggleMenu(); return; }
-                if (isGamePaused) return;
-                switch (event.code) {
-                    case 'KeyW': const timeNow = performance.now(); if (timeNow - lastWPressTime < doubleTapDelay) { isSprinting = true; } lastWPressTime = timeNow; moveForward = true; break;
-                    case 'KeyA': moveLeft = true; break;
-                    case 'KeyS': moveBackward = true; isSprinting = false; break;
-                    case 'KeyD': moveRight = true; break;
-                    case 'Space': if (onGround || isInWater || canJump) { velocity.y += isInWater ? 6.0 : 10.0; canJump = false; onGround = false; isInWater = false; isSprinting = false;} break;
-                    case 'ShiftLeft': case 'ShiftRight': if (!isShiftDown && controls) { controls.getObject().position.y -= crouchPositionOffsetY; } isShiftDown = true; isSprinting = false; break;
-                    case 'Digit1': selectBlock('grass'); break;
-                    case 'Digit2': selectBlock('dirt'); break;
-                    case 'Digit3': selectBlock('stone'); break;
-                    case 'Digit4': selectBlock('water'); break;
-                }
-            };
-            const onKeyUp = (event) => {
-                 if (isGamePaused && event.code !== 'Escape') return;
-                switch (event.code) {
-                    case 'KeyW': moveForward = false; isSprinting = false; break;
-                    case 'KeyA': moveLeft = false; break;
-                    case 'KeyS': moveBackward = false; break;
-                    case 'KeyD': moveRight = false; break;
-                    case 'ShiftLeft': case 'ShiftRight': if (isShiftDown && controls) { controls.getObject().position.y += crouchPositionOffsetY; } isShiftDown = false; break;
-                }
-            };
-            document.addEventListener('keydown', onKeyDown); document.addEventListener('keyup', onKeyUp);
+        // --- Setup Listeners (Called AFTER controls are created) ---
+        function setupControlListeners() { /* ... (no changes) ... */
+             const instructions = document.getElementById('instructions'); const crosshair = document.getElementById('crosshair'); const menu = document.getElementById('menu'); if (!blockerElement) blockerElement = document.getElementById('blocker'); instructions.onclick = () => { if(controls) controls.lock(); }; if (controls) { controls.addEventListener('lock', () => { if (!isGamePaused) { blockerElement.style.display = 'none'; crosshair.style.display = 'block'; menu.style.display = 'none'; } }); controls.addEventListener('unlock', () => { if (!isGamePaused) { blockerElement.style.display = 'flex'; } crosshair.style.display = 'none'; }); } document.removeEventListener('keydown', onKeyDown); document.removeEventListener('keyup', onKeyUp); document.addEventListener('keydown', onKeyDown); document.addEventListener('keyup', onKeyUp);
          }
-        function setupMenuControls() { /* ... (no changes) ... */
-             const menu = document.getElementById('menu'); const resumeButton = document.getElementById('resumeButton'); const restartButton = document.getElementById('restartButton'); const widthInput = document.getElementById('worldWidthInput'); const depthInput = document.getElementById('worldDepthInput'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox'); resumeButton.addEventListener('click', toggleMenu); restartButton.addEventListener('click', () => { const newWidth = parseInt(widthInput.value, 10); const newDepth = parseInt(depthInput.value, 10); if (isNaN(newWidth) || isNaN(newDepth) || newWidth < 16 || newWidth > 128 || newDepth < 16 || newDepth > 128) { alert("Bitte gültige Weltgröße eingeben (Breite/Tiefe: 16-128)."); return; } worldWidth = newWidth; worldDepth = newDepth; worldHalfWidth = worldWidth / 2; worldHalfDepth = worldDepth / 2; menu.style.display = 'none'; isGamePaused = false; init(); controls.lock(); }); showCoordsCheckbox.addEventListener('change', () => { showCoords = showCoordsCheckbox.checked; coordsDisplayElement.style.display = showCoords ? 'block' : 'none'; console.log("Show Coords:", showCoords); }); widthInput.value = worldWidth; depthInput.value = worldDepth; showCoordsCheckbox.checked = showCoords;
+
+        // Define key handlers outside setup so they can be referenced for removal
+        const onKeyDown = (event) => { /* ... (no changes) ... */
+            if (event.code === 'Escape') { toggleMenu(); return; } if (isGamePaused) return; switch (event.code) { case 'KeyW': const timeNow = performance.now(); if (timeNow - lastWPressTime < doubleTapDelay) { isSprinting = true; } lastWPressTime = timeNow; moveForward = true; break; case 'KeyA': moveLeft = true; break; case 'KeyS': moveBackward = true; isSprinting = false; break; case 'KeyD': moveRight = true; break; case 'Space': if (onGround || isInWater || canJump) { velocity.y += isInWater ? 6.0 : 10.0; canJump = false; onGround = false; isInWater = false; /* isSprinting = false; */ } break; case 'ShiftLeft': case 'ShiftRight': if (!isShiftDown && controls) { controls.getObject().position.y -= crouchPositionOffsetY; } isShiftDown = true; isSprinting = false; break; case 'Digit1': selectBlock('grass'); break; case 'Digit2': selectBlock('dirt'); break; case 'Digit3': selectBlock('stone'); break; case 'Digit4': selectBlock('water'); break; }
+        };
+        const onKeyUp = (event) => { /* ... (no changes) ... */
+                if (isGamePaused && event.code !== 'Escape') return; switch (event.code) { case 'KeyW': moveForward = false; isSprinting = false; break; case 'KeyA': moveLeft = false; break; case 'KeyS': moveBackward = false; break; case 'KeyD': moveRight = false; break; case 'ShiftLeft': case 'ShiftRight': if (isShiftDown && controls) { controls.getObject().position.y += crouchPositionOffsetY; } isShiftDown = false; break; }
+        };
+
+
+        function setupMenuControls() { /* ... (Reset logic included) ... */
+             const menu = document.getElementById('menu'); const resumeButton = document.getElementById('resumeButton'); const restartButton = document.getElementById('restartButton'); const widthInput = document.getElementById('worldWidthInput'); const depthInput = document.getElementById('worldDepthInput'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox'); resumeButton.addEventListener('click', toggleMenu);
+             restartButton.addEventListener('click', () => {
+                 const newWidth = parseInt(widthInput.value, 10); const newDepth = parseInt(depthInput.value, 10); if (isNaN(newWidth) || isNaN(newDepth) || newWidth < 16 || newWidth > 128 || newDepth < 16 || newDepth > 128) { alert("Bitte gültige Weltgröße eingeben (Breite/Tiefe: 16-128)."); return; }
+                 moveForward = false; moveBackward = false; moveLeft = false; moveRight = false; isSprinting = false; isShiftDown = false; velocity.set(0, 0, 0);
+                 worldWidth = newWidth; worldDepth = newDepth; worldHalfWidth = worldWidth / 2; worldHalfDepth = worldDepth / 2;
+                 menu.style.display = 'none'; isGamePaused = false;
+                 init(); // Re-initialize the world
+                 blockerElement.style.display = 'flex'; // Show blocker
+             });
+             showCoordsCheckbox.addEventListener('change', () => { showCoords = showCoordsCheckbox.checked; coordsDisplayElement.style.display = showCoords ? 'block' : 'none'; console.log("Show Coords:", showCoords); }); widthInput.value = worldWidth; depthInput.value = worldDepth; showCoordsCheckbox.checked = showCoords;
          }
         function toggleMenu() { /* ... (no changes) ... */
-            const menu = document.getElementById('menu'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox'); isGamePaused = !isGamePaused; if (isGamePaused) { showCoordsCheckbox.checked = showCoords; menu.style.display = 'flex'; controls.unlock(); } else { menu.style.display = 'none'; controls.lock(); } console.log("Game Paused:", isGamePaused);
+            const menu = document.getElementById('menu'); const showCoordsCheckbox = document.getElementById('showCoordsCheckbox'); isGamePaused = !isGamePaused; if (isGamePaused) { showCoordsCheckbox.checked = showCoords; menu.style.display = 'flex'; if(controls) controls.unlock(); } else { menu.style.display = 'none'; if(controls) controls.lock(); } console.log("Game Paused:", isGamePaused);
          }
 
         function onWindowResize() { /* ... (no changes) ... */
@@ -255,13 +247,20 @@
 
         // --- Mouse Interaction ---
         function onMouseDown(event) { /* ... (no changes) ... */
-            if (isGamePaused || !controls.isLocked) return; raycaster.setFromCamera({ x: 0, y: 0 }, camera); const nearbyObjectsForRaycast = getNearbyBlocks(controls.getObject().position.x, controls.getObject().position.z, 2); const intersects = raycaster.intersectObjects(nearbyObjectsForRaycast, false); if (intersects.length > 0) { const intersect = intersects[0]; if (intersect.distance > 6 * blockSize) return; if (event.button === 0) { if (intersect.object.position.y < (-4 * blockSize)) return; removeObjectFromGrid(intersect.object); const index = dynamicObjects.indexOf(intersect.object); if (index > -1) dynamicObjects.splice(index, 1); scene.remove(intersect.object); console.log("Removed block."); } else if (event.button === 2) { const placementPos = new THREE.Vector3().copy(intersect.point).add(intersect.face.normal.clone().multiplyScalar(0.01)); placementPos.divideScalar(blockSize).floor().multiplyScalar(blockSize).addScalar(blockSize / 2); let occupied = false; const nearbyForPlacementCheck = getNearbyBlocks(placementPos.x, placementPos.z, 0); for (const obj of nearbyForPlacementCheck) { if (obj.position.distanceToSquared(placementPos) < 0.1) { occupied = true; break; } } const playerHeight = isShiftDown ? playerHeightCrouching : playerHeightStanding; const playerWidth = 0.4 * blockSize; const playerHeadPos = controls.getObject().position.clone().add(new THREE.Vector3(0, playerHeight/2 - 0.1, 0)); const playerFeetPos = controls.getObject().position.clone().add(new THREE.Vector3(0, -playerHeight/2 + 0.1, 0)); const newBlockBox = new THREE.Box3().setFromCenterAndSize(placementPos, new THREE.Vector3(blockSize, blockSize, blockSize)); if (!occupied && !(newBlockBox.containsPoint(playerHeadPos) || newBlockBox.containsPoint(playerFeetPos) || (Math.abs(placementPos.x - controls.getObject().position.x) < playerWidth + blockSize/2 && Math.abs(placementPos.z - controls.getObject().position.z) < playerWidth + blockSize/2 && placementPos.y > playerFeetPos.y && placementPos.y < playerHeadPos.y))) { const selectedMaterial = blockMaterials[selectedBlockType] || stoneMaterial; const voxel = new THREE.Mesh(cubeGeometry, selectedMaterial); voxel.position.copy(placementPos); if (selectedBlockType === 'water') { voxel.userData.isWater = true; } scene.add(voxel); dynamicObjects.push(voxel); addObjectToGrid(voxel); } else { console.log("Cannot place block here (occupied or inside player)."); } } } else { console.log("No block intersected."); }
+            if (isGamePaused || !controls || !controls.isLocked) return; raycaster.setFromCamera({ x: 0, y: 0 }, camera); const nearbyObjectsForRaycast = getNearbyBlocks(controls.getObject().position.x, controls.getObject().position.z, 2); const intersects = raycaster.intersectObjects(nearbyObjectsForRaycast, false); if (intersects.length > 0) { const intersect = intersects[0]; if (intersect.distance > 6 * blockSize) return; if (event.button === 0) { if (intersect.object.position.y < (-4 * blockSize)) return; removeObjectFromGrid(intersect.object); const index = dynamicObjects.indexOf(intersect.object); if (index > -1) dynamicObjects.splice(index, 1); scene.remove(intersect.object); console.log("Removed block."); } else if (event.button === 2) { const placementPos = new THREE.Vector3().copy(intersect.point).add(intersect.face.normal.clone().multiplyScalar(0.01)); placementPos.divideScalar(blockSize).floor().multiplyScalar(blockSize).addScalar(blockSize / 2); let occupied = false; const nearbyForPlacementCheck = getNearbyBlocks(placementPos.x, placementPos.z, 0); for (const obj of nearbyForPlacementCheck) { if (obj.position.distanceToSquared(placementPos) < 0.1) { occupied = true; break; } } const playerHeight = isShiftDown ? playerHeightCrouching : playerHeightStanding; const playerWidth = 0.4 * blockSize; const playerHeadPos = controls.getObject().position.clone().add(new THREE.Vector3(0, playerHeight/2 - 0.1, 0)); const playerFeetPos = controls.getObject().position.clone().add(new THREE.Vector3(0, -playerHeight/2 + 0.1, 0)); const newBlockBox = new THREE.Box3().setFromCenterAndSize(placementPos, new THREE.Vector3(blockSize, blockSize, blockSize)); if (!occupied && !(newBlockBox.containsPoint(playerHeadPos) || newBlockBox.containsPoint(playerFeetPos) || (Math.abs(placementPos.x - controls.getObject().position.x) < playerWidth + blockSize/2 && Math.abs(placementPos.z - controls.getObject().position.z) < playerWidth + blockSize/2 && placementPos.y > playerFeetPos.y && placementPos.y < playerHeadPos.y))) { const selectedMaterial = blockMaterials[selectedBlockType] || stoneMaterial; const voxel = new THREE.Mesh(cubeGeometry, selectedMaterial); voxel.position.copy(placementPos); if (selectedBlockType === 'water') { voxel.userData.isWater = true; } scene.add(voxel); dynamicObjects.push(voxel); addObjectToGrid(voxel); } else { console.log("Cannot place block here (occupied or inside player)."); } } } else { console.log("No block intersected."); }
          }
 
 
         // --- Animation Loop ---
-        const cloudSpeed = 0.5;
-        const cloudWrapMargin = 10;
+        const dayNightCycleEnabled = true;
+        const sunAngleOffset = -Math.PI / 2;
+        const moonAngleOffset = Math.PI / 2;
+        // Pre-create colors for lerping
+        const skyColorDay = new THREE.Color(0x87CEEB);
+        const skyColorNight = new THREE.Color(0x000020);
+        const groundColorDay = new THREE.Color(0x777788);
+        const groundColorNight = new THREE.Color(0x111122);
+
 
         function animate() {
             requestAnimationFrame(animate);
@@ -269,19 +268,58 @@
             const delta = Math.min(0.1, (time - prevTime) / 1000);
             prevTime = time;
 
-            // --- Cloud Movement ---
-            const wrapBoundaryX = worldHalfWidth * blockSize + cloudWrapMargin;
-            cloudMeshes.forEach(cloud => {
-                cloud.position.x += cloudSpeed * delta;
-                if (cloud.position.x > wrapBoundaryX) {
-                    cloud.position.x = -wrapBoundaryX;
-                    cloud.position.z = (Math.random() - 0.5) * worldDepth * blockSize * 1.5;
+            // --- Time of Day Simulation & Updates ---
+            if (dayNightCycleEnabled) {
+                simulationTime += delta;
+                const cycleProgress = (simulationTime % totalCycleSeconds) / totalCycleSeconds;
+                const timeAngle = cycleProgress * Math.PI * 2;
+                const lightFactor = Math.max(0.15, (Math.cos((cycleProgress - 0.25) * Math.PI * 2) + 1) / 2);
+
+                // Update Sun/Moon Position & Visibility
+                const celestialRadius = Math.max(worldWidth, worldDepth) * blockSize * 0.6;
+                const celestialHeight = maxTerrainHeight + 15;
+                const sunAngle = timeAngle + sunAngleOffset;
+                const moonAngle = timeAngle + moonAngleOffset;
+                const isDayTime = cycleProgress < dayNightThreshold; // Check if it's daytime
+
+                if (sun) {
+                    sun.position.x = Math.cos(sunAngle) * celestialRadius;
+                    sun.position.y = Math.sin(sunAngle) * celestialRadius * 0.6 + celestialHeight;
+                    sun.position.z = 0;
+                    sun.visible = isDayTime; // *** Use isDayTime for visibility ***
+                    if (sun.visible) sun.lookAt(camera.position); // *** Make sun face camera ***
                 }
-            });
+                if (moon) {
+                    moon.position.x = Math.cos(moonAngle) * celestialRadius;
+                    moon.position.y = Math.sin(moonAngle) * celestialRadius * 0.6 + celestialHeight;
+                    moon.position.z = 0;
+                    moon.visible = !isDayTime; // *** Use inverted isDayTime for visibility ***
+                    if (moon.visible) moon.lookAt(camera.position); // *** Make moon face camera ***
+                }
+
+
+                // Update Lighting
+                const hemiLight = scene.userData.hemisphereLight;
+                const dirLight = scene.userData.directionalLight;
+
+                if (hemiLight) {
+                    hemiLight.intensity = lightFactor * 0.8 + 0.2;
+                    hemiLight.color.lerpColors(skyColorNight, skyColorDay, lightFactor);
+                    hemiLight.groundColor.lerpColors(groundColorNight, groundColorDay, lightFactor);
+                }
+                if (dirLight) {
+                     dirLight.intensity = lightFactor * 1.6 + 0.2;
+                     if (sun && sun.visible) { dirLight.position.copy(sun.position).normalize().multiplyScalar(100); }
+                     else if (moon && moon.visible) { dirLight.position.copy(moon.position).normalize().multiplyScalar(100); }
+                }
+                 // Update Sky Color
+                 scene.background.lerpColors(skyColorNight, skyColorDay, lightFactor);
+
+            } // End Day/Night Cycle Updates
 
 
             if (showCoords && coordsDisplayElement) { const playerPos = controls.getObject().position; coordsDisplayElement.textContent = `X: ${playerPos.x.toFixed(1)} | Y: ${playerPos.y.toFixed(1)} | Z: ${playerPos.z.toFixed(1)}`; }
-            if (isGamePaused || !controls.isLocked) { renderer.render(scene, camera); return; }
+            if (isGamePaused || !controls || !controls.isLocked) { renderer.render(scene, camera); return; }
 
             const playerHeight = isShiftDown ? playerHeightCrouching : playerHeightStanding;
             const playerHalfHeight = playerHeight / 2;
