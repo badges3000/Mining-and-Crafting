@@ -35,3 +35,5 @@ A Minecraft-inspired game, written entirely with Gemini AI 2.5 using Threes.js a
 **Optimizations:**
 * Use individual block meshes for the world (allowing full interaction).
 * Implement a spatial grid (`cellSize` approx 4) to optimize collision detection by checking only nearby blocks.
+
+* Video: https://x.com/i/status/1910419546923475040
